@@ -74,7 +74,7 @@ static class Capture
             w = p.X; h = p.Y;
         }
         double k = Math.Min(1.0, LongSide / (double)Math.Max(w, h));
-        int dpi = (int)(c.Resources!.DisplayMetrics!.DensityDpi * k);
+        int dpi = (int)((int)c.Resources!.DisplayMetrics!.DensityDpi * k);
         return ((int)(w * k) & ~1, (int)(h * k) & ~1, Math.Max(120, dpi));
     }
 
