@@ -508,29 +508,37 @@ public static class License
         return new Reply((int)res.StatusCode, root);
     }
 
-    /// <summary>Writes the question by hand (no reflection, so it survives trimming).</summary>
+    /// <summary>Writes the question by hand (no reflection, so it survives trimming): text, numbers, yes/no, lists and objects.</summary>
     static string ToJson(Dictionary<string, object?> body)
     {
         using var ms = new MemoryStream();
-        using (var w = new Utf8JsonWriter(ms))
-        {
-            w.WriteStartObject();
-            foreach (var (k, v) in body)
-            {
-                switch (v)
-                {
-                    case null: w.WriteNull(k); break;
-                    case string s: w.WriteString(k, s); break;
-                    case bool bo: w.WriteBoolean(k, bo); break;
-                    case int i: w.WriteNumber(k, i); break;
-                    case long l: w.WriteNumber(k, l); break;
-                    case double d: w.WriteNumber(k, d); break;
-                    default: w.WriteString(k, v.ToString()); break;
-                }
-            }
-            w.WriteEndObject();
-        }
+        using (var w = new Utf8JsonWriter(ms)) Write(w, body);
         return Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    static void Write(Utf8JsonWriter w, object? v)
+    {
+        switch (v)
+        {
+            case null: w.WriteNullValue(); break;
+            case string s: w.WriteStringValue(s); break;
+            case bool b: w.WriteBooleanValue(b); break;
+            case int i: w.WriteNumberValue(i); break;
+            case long l: w.WriteNumberValue(l); break;
+            case double d: w.WriteNumberValue(d); break;
+            case float f: w.WriteNumberValue(f); break;
+            case Dictionary<string, object?> map:
+                w.WriteStartObject();
+                foreach (var (k, x) in map) { w.WritePropertyName(k); Write(w, x); }
+                w.WriteEndObject();
+                break;
+            case System.Collections.IEnumerable list:
+                w.WriteStartArray();
+                foreach (var x in list) Write(w, x);
+                w.WriteEndArray();
+                break;
+            default: w.WriteStringValue(v.ToString()); break;
+        }
     }
 
     static string Str(JsonElement e, string name) =>

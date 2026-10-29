@@ -3,6 +3,10 @@
   <uses-permission android:name="android.permission.INTERNET" />
   <!-- updates from inside the app (Updater.cs): Android still asks the member to confirm each one -->
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <!-- "See the game": Android's screen sharing (Capture.cs) runs as a foreground service with a notification -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
   <!-- Android 11+: lets the app see which browsers can open the guild site in app mode -->
   <queries>

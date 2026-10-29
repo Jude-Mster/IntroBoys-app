@@ -29,6 +29,7 @@ sealed class Overlay
         Runner.Changed += OnRunnerChanged;
         Runner.Pressed += OnPressed;
         License.Changed += OnRunnerChanged;
+        Capture.Changed += OnRunnerChanged;
     }
 
     // ------------------------------------------------------------------ windows
@@ -62,10 +63,17 @@ sealed class Overlay
         CloseEditor();
         HideMarkers();
         Remove(control);
-        control = null; panel = null; title = null; detail = null; startStop = null;
+        control = null; panel = null; title = null; detail = null; startStop = null; panelBox = null;
     }
 
     // ------------------------------------------------------------------ the floating S
+    TextView? sub, hpText, posText, logText, totals, runsText, screenNote;
+    HpBar? hpBar;
+    LinearLayout? runsRow;
+    Button? screenBtn;
+    readonly Dictionary<RunMode, Button> modeBtns = new();
+    bool ticking;
+
     public void ShowControl()
     {
         if (control != null || editor != null) return;
@@ -82,32 +90,120 @@ sealed class Overlay
         s.Elevation = Ui.Dp(c, 6);
         root.AddView(s, new LinearLayout.LayoutParams(Ui.Dp(c, 46), Ui.Dp(c, 46)));
 
-        panel = Ui.CardBox(c, 8);
-        panel.Background = Ui.Round(c, Color.Argb(235, 18, 18, 21), 14, Ui.Line);
-        title = Ui.Title(c, "READY", 15);
-        detail = Ui.Text(c, "", 12, Ui.Muted);
-        panel.AddView(title);
+        panel = Ui.CardBox(c, 6);
+        panel.Background = Ui.Round(c, Color.Argb(238, 18, 18, 21), 14, Ui.Line);
+        int pp = Ui.Dp(c, 10);
+        panel.SetPadding(pp, pp, pp, pp);
+
+        var head = Ui.Row(c, 6);
+        var names = Ui.Column(c, 0);
+        title = Ui.Title(c, "READY", 14);
+        sub = Ui.Text(c, "", 11, Ui.Muted);
+        names.AddView(title);
+        names.AddView(sub);
+        head.AddView(names, Ui.Weight());
+        panel.AddView(head, Ui.Wide());
+
+        // boss HP bar and position (read from the screen)
+        hpBar = new HpBar(c);
+        panel.AddView(hpBar, Ui.Wide(Ui.Dp(c, 8)));
+        var hpRow = Ui.Row(c, 6);
+        hpText = Ui.Text(c, "boss HP –", 11, Ui.Soft);
+        posText = Ui.Text(c, "position –", 11, Ui.Soft);
+        hpRow.AddView(hpText, Ui.Weight());
+        hpRow.AddView(posText);
+        panel.AddView(hpRow, Ui.Wide());
+        screenNote = Ui.Text(c, "", 10, Ui.Gold);
+        panel.AddView(screenNote);
+
+        // live log
+        logText = Ui.Text(c, "", 10, Ui.Muted);
+        logText.SetTypeface(Typeface.Monospace, TypefaceStyle.Normal);
+        logText.SetMaxLines(4);
+        panel.AddView(logText, Ui.Wide());
+
+        // what Start does
+        var modes = Ui.Row(c, 4);
+        foreach (var m in new[] { RunMode.Attack, RunMode.Labyrinth, RunMode.Den })
+        {
+            var b = Ui.Button(c, m == RunMode.Attack ? "Attack" : m == RunMode.Den ? "Den" : "Labyrinth", false, () => { if (!Runner.Running) Runner.Mode = m; }, 11);
+            modeBtns[m] = b;
+            modes.AddView(b, Ui.Weight());
+        }
+        panel.AddView(modes, Ui.Wide());
+        runsRow = Ui.Row(c, 6);
+        runsText = Ui.Text(c, "", 12, Ui.Soft);
+        runsRow.AddView(runsText, Ui.Weight());
+        runsRow.AddView(Ui.Button(c, "−", false, () => Runner.Runs = Runner.Runs - 1, 12));
+        runsRow.AddView(Ui.Button(c, "+", false, () => Runner.Runs = Runner.Runs + 1, 12));
+        panel.AddView(runsRow, Ui.Wide());
+        totals = Ui.Text(c, "", 10, Ui.Muted);
+        panel.AddView(totals);
+        detail = Ui.Text(c, "", 11, Ui.Muted);
         panel.AddView(detail);
-        var buttons = Ui.Row(c, 6);
-        startStop = Ui.Button(c, "Start", true, () => { if (Runner.Running) Runner.Stop("Stopped."); else StartRun(); }, 13);
-        buttons.AddView(startStop, Ui.Weight());
-        buttons.AddView(Ui.Button(c, "Bubbles", false, OpenEditor, 13), Ui.Weight());
-        buttons.AddView(Ui.Button(c, "Hide", false, () => TapService.SetControlVisible(false), 13), Ui.Weight());
-        panel.AddView(buttons, Ui.Wide());
-        panel.Visibility = ViewStates.Gone;
-        root.AddView(panel, new LinearLayout.LayoutParams(Ui.Dp(c, 250), ViewGroup.LayoutParams.WrapContent));
+
+        var row1 = Ui.Row(c, 6);
+        startStop = Ui.Button(c, "Start", true, () => { if (Runner.Running) Runner.Stop("Stopped."); else StartRun(); }, 12);
+        row1.AddView(startStop, Ui.Weight());
+        row1.AddView(Ui.Button(c, "Camera fix", false, () => _ = CameraFix(), 12), Ui.Weight());
+        panel.AddView(row1, Ui.Wide());
+        var row2 = Ui.Row(c, 6);
+        row2.AddView(Ui.Button(c, "Bubbles", false, OpenEditor, 12), Ui.Weight());
+        screenBtn = Ui.Button(c, "Screen", false, ToggleScreen, 12);
+        row2.AddView(screenBtn, Ui.Weight());
+        row2.AddView(Ui.Button(c, "Hide", false, () => TapService.SetControlVisible(false), 12), Ui.Weight());
+        panel.AddView(row2, Ui.Wide());
+
+        var scroller = new ScrollView(c);
+        scroller.AddView(panel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        scroller.Visibility = ViewStates.Gone;
+        root.AddView(scroller, new LinearLayout.LayoutParams(Ui.Dp(c, 280), ViewGroup.LayoutParams.WrapContent));
 
         controlLp = Lp(false, true);
         controlLp.X = TapService.Prefs.GetInt("control_x", Ui.Dp(c, 8));
-        controlLp.Y = TapService.Prefs.GetInt("control_y", Ui.Dp(c, 120));
+        controlLp.Y = TapService.Prefs.GetInt("control_y", Ui.Dp(c, 60));
         Draggable(s, root, () =>
         {
-            panel.Visibility = panel.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
+            scroller.Visibility = scroller.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
             Refresh();
+            if (scroller.Visibility == ViewStates.Visible) Tick();
         });
         control = root;
+        panelBox = scroller;
         Add(root, controlLp);
         Refresh();
+    }
+    View? panelBox;
+
+    /// <summary>While the panel is open: the time, the log and the totals stay current (once a second).</summary>
+    void Tick()
+    {
+        if (ticking) return;
+        ticking = true;
+        void Next()
+        {
+            if (control == null || panelBox == null || panelBox.Visibility != ViewStates.Visible) { ticking = false; return; }
+            Refresh();
+            svc.Main.PostDelayed(Next, 1000);
+        }
+        svc.Main.PostDelayed(Next, 1000);
+    }
+
+    async Task CameraFix()
+    {
+        if (Runner.Running) { AppLog.Add("camera fix: stop first"); return; }
+        if (!License.Allowed()) { AppLog.Add("camera fix: " + License.Why()); return; }
+        // the panel must not catch the drags: fold it while the fix runs
+        if (panelBox != null) panelBox.Visibility = ViewStates.Gone;
+        try { await svc.CameraFixAsync(BubbleLayout.Load()); }
+        catch (Exception ex) { AppLog.Add("camera fix: " + ex.Message); }
+        svc.Main.Post(Refresh);
+    }
+
+    void ToggleScreen()
+    {
+        if (Capture.On) CaptureService.StopSharing(c);
+        else CaptureActivity.Request(c);
     }
 
     /// <summary>Drag the S to move the window; a tap without moving runs <paramref name="onTap"/>.</summary>
@@ -151,26 +247,40 @@ sealed class Overlay
     void Refresh()
     {
         if (control == null || title == null || detail == null || startStop == null) return;
+        var layout = BubbleLayout.Load();
+        var mode = Runner.Mode;
         detail.SetTextColor(Ui.Muted);
         if (Runner.Running)
         {
             title.Text = "AUTO ATTACK · LIVE";
             title.SetTextColor(Ui.Green);
-            detail.Text = Runner.StatusLine();
             startStop.Text = "Stop";
+            detail.Text = Runner.StatusLine();
             ShowMarkers();
         }
         else
         {
             title.Text = "READY";
             title.SetTextColor(Color.White);
-            var layout = BubbleLayout.Load();
-            string lic = License.Allowed() ? "License: " + License.TimeLeftText() + " left" : License.Why();
-            detail.Text = (Runner.LastStop.Length > 0 ? Runner.LastStop + "\n" : "") +
-                          (layout.Bubbles.Count == 0 ? "No bubbles yet: tap Bubbles to place them." : layout.Bubbles.Count + " bubbles placed.") + "\n" + lic;
             startStop.Text = "Start";
+            string lic = License.Allowed() ? "License: " + License.TimeLeftText() + " left" : License.Why();
+            int n = layout.Bubbles.Count(b => !b.IsArea);
+            detail.Text = (Runner.LastStop.Length > 0 ? Runner.LastStop + "\n" : "") +
+                          (n == 0 ? "No bubbles yet: tap Bubbles." : n + " bubbles") + " · " + lic;
             HideMarkers();
         }
+        if (sub != null) sub.Text = Runner.ModeName(mode) + (mode == RunMode.Attack ? "" : " · " + (Runner.Runs == 0 ? "until stopped" : Runner.Runs + " runs"));
+        foreach (var (m, b) in modeBtns)
+            b.Background = m == mode ? Ui.Round(c, Ui.Red, 9) : Ui.Round(c, Color.Transparent, 9, Color.ParseColor("#3A3A40"));
+        if (runsRow != null) runsRow.Visibility = mode == RunMode.Attack ? ViewStates.Gone : ViewStates.Visible;
+        if (runsText != null) runsText.Text = "Runs in a row: " + (Runner.Runs == 0 ? "0 (until stopped)" : Runner.Runs.ToString());
+        if (totals != null) totals.Text = "Done on this phone: Labyrinth " + Runner.TotalLabyrinth + " · Den " + Runner.TotalDen;
+        if (logText != null) logText.Text = string.Join("\n", AppLog.Last(4));
+        hpBar?.Set(-1);
+        if (screenNote != null)
+            screenNote.Text = !Capture.On ? "Screen sharing is off: tap Screen (live view on the website, and screen reading)."
+                            : "Boss HP and position reading for the phone game: next update.";
+        if (screenBtn != null) screenBtn.Text = Capture.On ? "Screen ✓" : "Screen";
     }
 
     // ------------------------------------------------------------------ dots where it presses
@@ -196,7 +306,7 @@ sealed class Overlay
         Runner.Stop("Stopped to edit the bubbles.");
         HideMarkers();
         Remove(control);
-        control = null; panel = null; title = null; detail = null; startStop = null;
+        control = null; panel = null; title = null; detail = null; startStop = null; panelBox = null;
         editor = new Editor(svc, BubbleLayout.Load(), CloseEditorAndShowControl);
         Add(editor.Root, editor.Lp);
     }
@@ -252,7 +362,7 @@ sealed class MarkerView : View
         for (int i = 0; i < layout.Bubbles.Count; i++)
         {
             var b = layout.Bubbles[i];
-            if (b.Mode == PressMode.Off) continue;
+            if (b.Mode == PressMode.Off || b.IsArea) continue;
             var (x, y) = layout.At(b, w, h);
             x -= loc[0]; y -= loc[1];
             var col = Color.ParseColor(Bubble.Color(b.Kind));
@@ -265,5 +375,21 @@ sealed class MarkerView : View
                 canvas.DrawCircle(x, y, big, ring);
             }
         }
+    }
+}
+
+/// <summary>The boss HP bar in the panel (empty and grey until the boss bar is read).</summary>
+sealed class HpBar : View
+{
+    readonly Paint back = new() { AntiAlias = true }, fill = new() { AntiAlias = true };
+    double value = -1;
+    public HpBar(Context c) : base(c) { back.Color = Color.ParseColor("#2A2A2F"); fill.Color = Ui.Red; }
+    public void Set(double v) { if (Math.Abs(v - value) > 0.001) { value = v; Invalidate(); } }
+    protected override void OnDraw(Canvas canvas)
+    {
+        base.OnDraw(canvas);
+        float r = Height / 2f;
+        canvas.DrawRoundRect(0, 0, Width, Height, r, r, back);
+        if (value > 0) canvas.DrawRoundRect(0, 0, (float)(Width * Math.Min(1, value)), Height, r, r, fill);
     }
 }

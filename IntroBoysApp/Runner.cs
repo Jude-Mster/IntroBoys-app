@@ -7,8 +7,37 @@ namespace IntroBoys.App;
 /// again and again; "Every…" bubbles (target, skills, buffs, potion, auto loot) when their time comes round, in between; "Once"
 /// bubbles at the start. One press at a time, so a press never cuts another short. Stops by itself without a valid license.
 /// </summary>
+/// <summary>What Start does: auto attack on the spot, or a Labyrinth or Den run.</summary>
+public enum RunMode { Attack, Labyrinth, Den }
+
 static class Runner
 {
+    static Android.Content.ISharedPreferences Prefs => TapService.Prefs;
+
+    /// <summary>The chosen run (remembered).</summary>
+    public static RunMode Mode
+    {
+        get => (RunMode)Math.Clamp(Prefs.GetInt("run_mode", 0), 0, 2);
+        set { Prefs.Edit()!.PutInt("run_mode", (int)value)!.Apply(); Raise(); }
+    }
+    /// <summary>Runs in a row for Labyrinth / Den (0 = until stopped).</summary>
+    public static int Runs
+    {
+        get => Math.Clamp(Prefs.GetInt("run_count", 0), 0, 999);
+        set { Prefs.Edit()!.PutInt("run_count", Math.Clamp(value, 0, 999))!.Apply(); Raise(); }
+    }
+    /// <summary>All-time finished runs on this phone.</summary>
+    public static int TotalLabyrinth => Prefs.GetInt("total_laby", 0);
+    public static int TotalDen => Prefs.GetInt("total_den", 0);
+    /// <summary>Called when a Labyrinth or Den run finishes.</summary>
+    public static void CountRun(RunMode m)
+    {
+        string k = m == RunMode.Den ? "total_den" : "total_laby";
+        Prefs.Edit()!.PutInt(k, Prefs.GetInt(k, 0) + 1)!.Apply();
+        Raise();
+    }
+    public static string ModeName(RunMode m) => m switch { RunMode.Labyrinth => "Labyrinth", RunMode.Den => "Den (LOD)", _ => "Auto attack" };
+
     const int HoldMs = 900, TapMs = 70, GapMs = 45;
 
     public static bool Running { get; private set; }
@@ -24,13 +53,16 @@ static class Runner
     static readonly object gate = new();
 
     /// <summary>Starts auto attack. Returns null when it started, otherwise why it can't.</summary>
-    public static string? Start()
+    public static string? Start(RunMode? mode = null)
     {
+        var m = mode ?? Mode;
+        if (m != RunMode.Attack)
+            return ModeName(m) + " runs need the screen reading (boss HP bar, position) set up for the phone game first: coming in the next update. Auto attack works now.";
         var svc = TapService.Instance;
         if (svc == null) return "Turn on the tap permission in the app first.";
         if (!License.Allowed()) return License.Why();
         var layout = BubbleLayout.Load();
-        if (!layout.Bubbles.Any(b => b.Mode != PressMode.Off)) return "Place at least one bubble first (tap Bubbles).";
+        if (!layout.Bubbles.Any(b => b.Mode != PressMode.Off && !b.IsArea)) return "Place at least one bubble first (tap Bubbles).";
         lock (gate)
         {
             if (Running) return null;
@@ -42,6 +74,7 @@ static class Runner
         }
         var ct = cts.Token;
         _ = Task.Run(() => Loop(svc, layout, ct));
+        AppLog.Add("start: auto attack (" + layout.Bubbles.Count(b => b.Mode != PressMode.Off && !b.IsArea) + " bubbles)");
         Raise();
         return null;
     }
@@ -56,6 +89,7 @@ static class Runner
             cts?.Cancel();
             cts = null;
         }
+        AppLog.Add(why.Length > 0 ? why : "stopped");
         Raise();
     }
 
@@ -75,7 +109,7 @@ static class Runner
     {
         var list = layout.Bubbles;
         var due = new long[list.Count];
-        for (int i = 0; i < list.Count; i++) due[i] = list[i].Mode == PressMode.Off ? long.MaxValue : 0;
+        for (int i = 0; i < list.Count; i++) due[i] = list[i].Mode == PressMode.Off || list[i].IsArea ? long.MaxValue : 0;
         int failed = 0;
         try
         {
@@ -102,6 +136,7 @@ static class Runner
                 bool ok = await svc.PressAsync(x, y, b.Mode == PressMode.Hold ? HoldMs : TapMs);
                 if (ct.IsCancellationRequested) return;
                 Pressed?.Invoke(pick);
+                if (b.Mode != PressMode.Hold || Presses == 0) AppLog.Add((b.Mode == PressMode.Hold ? "attack: holding " : "press ") + b.Label + (ok ? "" : " (cancelled)"));
 
                 long after = SystemClock.UptimeMillis();
                 due[pick] = b.Mode switch

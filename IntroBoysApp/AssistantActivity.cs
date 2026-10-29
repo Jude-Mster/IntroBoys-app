@@ -28,7 +28,8 @@ public class AssistantActivity : Activity
     TextView? who, days, licMsg, bubbleList, runMsg, codeText, codeHint, updText, updMsg, setupDone;
     Button? signIn, signOut, recheck, showControl, updButton;
     LinearLayout? codeBox, updCard;
-    Step? stepSign, stepRestricted, stepTaps, stepBubbles;
+    Step? stepSign, stepRestricted, stepTaps, stepScreen, stepBubbles;
+    TextView? totalsText;
     CancellationTokenSource? signing, updating;
     Updater.Release? update;
     string verifyUrl = "";
@@ -37,12 +38,14 @@ public class AssistantActivity : Activity
     {
         base.OnCreate(savedInstanceState);
         License.Begin();
+        Remote.Begin();
         SetContentView(Build());
         License.Changed += OnChanged;
         TapService.StateChanged += OnChanged;
         Runner.Changed += OnChanged;
         BubbleLayout.Saved += OnChanged;
         InstallResult.Message += OnInstallMessage;
+        Capture.Changed += OnChanged;
         Refresh();
     }
 
@@ -60,6 +63,7 @@ public class AssistantActivity : Activity
         Runner.Changed -= OnChanged;
         BubbleLayout.Saved -= OnChanged;
         InstallResult.Message -= OnInstallMessage;
+        Capture.Changed -= OnChanged;
         signing?.Cancel();
         updating?.Cancel();
         base.OnDestroy();
@@ -163,16 +167,26 @@ public class AssistantActivity : Activity
             "Tap Accessibility, then Installed apps (or Downloaded apps), then IntroBoys Assistant taps. Switch it on and tap Allow.");
         stepTaps.AddButton("Accessibility", true, () => Open(new Intent(Settings.ActionAccessibilitySettings)));
         setup.AddView(stepTaps.View, Ui.Wide());
+        stepScreen = new Step(c, n++, "See the game (screen sharing)",
+            "Lets the Assistant see the screen: the live view on the guild website now, and reading the boss HP bar and your position. " +
+            "Android asks each time the app starts; pick \"Entire screen\" (or the game). A small notification shows while it is on.");
+        stepScreen.AddButton("Allow", true, () => CaptureActivity.Request(this));
+        stepScreen.AddButton("Stop", false, () => CaptureService.StopSharing(this));
+        setup.AddView(stepScreen.View, Ui.Wide());
         stepBubbles = new Step(c, n++, "Place your bubbles",
-            "Tap Show the floating S, open the game, tap the S, then Bubbles. Drag a bubble onto each game button (attack, skills, buffs, auto loot) and Save.");
+            "Tap Show the floating S, open the game, tap the S, then Bubbles. Drag a bubble onto each game button (attack, skills, buffs, auto loot), " +
+            "and place the camera area and the move pad. Tap the camera area to set the camera fix after a teleport. Save with ✓.");
         setup.AddView(stepBubbles.View, Ui.Wide());
         setup.AddView(Ui.Text(c, "You only do this once on this phone. Updates from this screen keep everything.", 11, Ui.Muted));
         col.AddView(setup, Ui.Wide());
 
         // run
         var run = Ui.CardBox(c);
-        run.AddView(Ui.Title(c, "AUTO ATTACK"));
-        run.AddView(Ui.Text(c, "Open the game, tap the floating S, then Start. Tap it again to Stop.", 13, Ui.Soft));
+        run.AddView(Ui.Title(c, "RUN"));
+        run.AddView(Ui.Text(c, "Open the game and tap the floating S: pick Attack, Labyrinth or Den, then Start. " +
+                               "Auto attack works now; Labyrinth and Den runs come once the screen reading is set up for the phone game.", 13, Ui.Soft));
+        totalsText = Ui.Text(c, "", 13, Color.White, true);
+        run.AddView(totalsText);
         bubbleList = Ui.Text(c, "", 13, Color.White);
         run.AddView(bubbleList);
         showControl = Ui.Button(c, "Show the floating S", true, ToggleControl);
@@ -209,7 +223,9 @@ public class AssistantActivity : Activity
         stepSign!.Set(ok);
         stepRestricted?.Set(tapsOn);           // can't be seen directly: done once taps could be switched on
         stepTaps!.Set(tapsOn);
+        stepScreen!.Set(Capture.On);
         stepBubbles!.Set(layout.Bubbles.Count > 0);
+        totalsText!.Text = "Done on this phone: Labyrinth " + Runner.TotalLabyrinth + " · Den " + Runner.TotalDen;
         setupDone!.Text = ok && tapsOn && layout.Bubbles.Count > 0 ? "ALL DONE ✓" : "";
 
         bubbleList!.Text = layout.Bubbles.Count == 0

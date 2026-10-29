@@ -37,6 +37,7 @@ public class TapService : AccessibilityService
         Instance = this;
         Overlay = new Overlay(this);
         License.Begin();
+        Remote.Begin();
         try { StateChanged?.Invoke(); } catch { /* a listener's problem */ }
         // Nothing shows by itself: not when the phone starts, not when the app opens. The floating S appears only when the
         // member taps "Show the floating S" in the app.
@@ -150,6 +151,72 @@ public class TapService : AccessibilityService
         // Android always answers, but never wait forever
         _ = Task.Delay((int)ms + 2000).ContinueWith(_ => done.TrySetResult(false));
         return done.Task;
+    }
+
+    /// <summary>Drags from one point to another over <paramref name="ms"/> milliseconds (the camera, the move pad).</summary>
+    public Task<bool> SwipeAsync(float x1, float y1, float x2, float y2, long ms) =>
+        Strokes(ms, (x1, y1, x2, y2));
+
+    /// <summary>Two fingers from <paramref name="from"/> apart to <paramref name="to"/> apart around a point: a pinch (zoom).</summary>
+    public Task<bool> PinchAsync(float cx, float cy, float from, float to, long ms) =>
+        Strokes(ms, (cx - from / 2, cy, cx - to / 2, cy), (cx + from / 2, cy, cx + to / 2, cy));
+
+    Task<bool> Strokes(long ms, params (float x1, float y1, float x2, float y2)[] lines)
+    {
+        License.Require();
+        var (w, h) = ScreenSize();
+        float X(float v) => Math.Clamp(v, 0, Math.Max(0, w - 1));
+        float Y(float v) => Math.Clamp(v, 0, Math.Max(0, h - 1));
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Main.Post(() =>
+        {
+            try
+            {
+                var b = new GestureDescription.Builder();
+                foreach (var l in lines)
+                {
+                    var path = new Android.Graphics.Path();
+                    path.MoveTo(X(l.x1), Y(l.y1));
+                    path.LineTo(X(l.x2), Y(l.y2));
+                    b.AddStroke(new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms)));
+                }
+                if (!DispatchGesture(b.Build()!, new Result(done), null)) done.TrySetResult(false);
+            }
+            catch { done.TrySetResult(false); }
+        });
+        _ = Task.Delay((int)ms + 2000).ContinueWith(_ => done.TrySetResult(false));
+        return done.Task;
+    }
+
+    /// <summary>
+    /// The camera fix after a teleport: each step on the camera area, in order. Returns false (and says why) when there is no camera
+    /// area or nothing to do.
+    /// </summary>
+    public async Task<bool> CameraFixAsync(BubbleLayout layout, CancellationToken ct = default)
+    {
+        var cam = layout.Find(BubbleKind.Camera);
+        if (cam == null) { AppLog.Add("camera fix: no camera area placed (Bubbles, + Camera area)"); return false; }
+        if (layout.CamFix.Count == 0) { AppLog.Add("camera fix: no steps yet (Bubbles, tap the camera area)"); return false; }
+        var (sw, sh) = ScreenSize();
+        var (cx, cy) = layout.At(cam, sw, sh);
+        var (aw, ah) = layout.SizeAt(cam, sw, sh);
+        AppLog.Add("camera fix: " + string.Join(", ", layout.CamFix.Select(x => x.Describe())));
+        foreach (var st in layout.CamFix)
+        {
+            ct.ThrowIfCancellationRequested();
+            float dx = (float)(aw / 2 * st.Amount), dy = (float)(ah / 2 * st.Amount);
+            switch (st.Op)
+            {
+                case CamOp.Left: await SwipeAsync(cx + dx, cy, cx - dx, cy, 450); break;
+                case CamOp.Right: await SwipeAsync(cx - dx, cy, cx + dx, cy, 450); break;
+                case CamOp.Up: await SwipeAsync(cx, cy + dy, cx, cy - dy, 450); break;
+                case CamOp.Down: await SwipeAsync(cx, cy - dy, cx, cy + dy, 450); break;
+                case CamOp.ZoomIn: await PinchAsync(cx, cy, Math.Min(aw, ah) * 0.15f, (float)(Math.Min(aw, ah) * (0.15 + 0.7 * st.Amount)), 500); break;
+                case CamOp.ZoomOut: await PinchAsync(cx, cy, (float)(Math.Min(aw, ah) * (0.15 + 0.7 * st.Amount)), Math.Min(aw, ah) * 0.15f, 500); break;
+            }
+            await Task.Delay(250, ct);
+        }
+        return true;
     }
 
     sealed class Result : GestureResultCallback

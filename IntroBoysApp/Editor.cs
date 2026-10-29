@@ -6,25 +6,25 @@ using Android.Widget;
 namespace IntroBoys.App;
 
 /// <summary>
-/// "Place your bubbles", drawn over the game: add bubbles, drag each onto the game button it should press (the dot in the middle is
-/// where the finger lands), choose how it is pressed, then Save. The panel can be moved to the other side or folded away so it
-/// never hides a game button.
+/// "Bubbles", drawn over the game: add bubbles and drag each onto the game button it should press (the dot in the middle is where the
+/// finger lands), choose how it is pressed, place the camera area and the move pad, and set the camera fix after a teleport. ✓ saves,
+/// ✕ leaves without saving. The panel can be moved to the other side or folded away so it never hides a game button.
 /// </summary>
 sealed class Editor
 {
     public FrameLayout Root { get; }
-    /// <summary>The editor's window settings (made untouchable for a moment by Test this tap).</summary>
+    /// <summary>The editor's window settings (made untouchable for a moment while a test runs).</summary>
     public WindowManagerLayoutParams Lp { get; } = Overlay.Lp(true, true);
     readonly TapService svc;
     readonly Context c;
     readonly BubbleLayout layout;
     readonly Action close;
-    readonly List<BubbleView> views = new();
+    readonly List<ItemView> views = new();
     readonly int size;
     readonly int[] loc = new int[2];
-    BubbleView? selected;
+    ItemView? selected;
 
-    readonly LinearLayout panel, body, selBox, everyRow;
+    readonly LinearLayout panel, body, selBox, modesRow, everyRow, camBox, padBox, stepsList, tapButtons;
     readonly TextView selTitle, everyText, count;
     readonly Dictionary<PressMode, Button> modeButtons = new();
     bool panelRight;
@@ -46,8 +46,7 @@ sealed class Editor
         panel = Ui.CardBox(c, 8);
         panel.Background = Ui.Round(c, Color.Argb(240, 18, 18, 21), 14, Ui.Line);
         var head = Ui.Row(c, 6);
-        var t = Ui.Title(c, "BUBBLES", 14);
-        head.AddView(t, Ui.Weight());
+        head.AddView(Ui.Title(c, "BUBBLES", 14), Ui.Weight());
         head.AddView(Ui.Button(c, "⇄", false, FlipSide, 13));
         var fold = Ui.Button(c, "–", false, null, 13);
         head.AddView(fold);
@@ -57,32 +56,34 @@ sealed class Editor
         panel.AddView(head, Ui.Wide());
 
         body = Ui.Column(c, 8);
-        body.AddView(Ui.Text(c, "Add a bubble, then drag it onto the game button (the dot in the middle is where it taps). Tap a bubble to change or remove it. ✓ saves, ✕ leaves without saving.", 12, Ui.Muted));
-        var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.Potion, BubbleKind.AutoLoot, BubbleKind.Other };
+        body.AddView(Ui.Text(c, "Add a bubble and drag it onto the game button (the dot in the middle is where it taps). Tap one to change or remove it. Fold the panel (–) to move bubbles under it.", 11, Ui.Muted));
+        var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.Potion, BubbleKind.AutoLoot,
+                            BubbleKind.Teleport, BubbleKind.Return, BubbleKind.Other, BubbleKind.Camera, BubbleKind.MovePad };
         LinearLayout? row = null;
         for (int i = 0; i < kinds.Length; i++)
         {
             if (i % 3 == 0) { row = Ui.Row(c, 6); body.AddView(row, Ui.Wide()); }
             var k = kinds[i];
-            row!.AddView(Ui.Button(c, "+ " + Bubble.Name(k), false, () => AddBubble(k), 12), Ui.Weight());
+            row!.AddView(Ui.Button(c, "+ " + Bubble.Name(k), false, () => AddBubble(k), 11), Ui.Weight());
         }
-        if (kinds.Length % 3 != 0) for (int i = kinds.Length % 3; i < 3; i++) row!.AddView(new View(c), new LinearLayout.LayoutParams(0, 1, 1));   // an empty slot: 1 px tall, never the whole screen
+        if (kinds.Length % 3 != 0) for (int i = kinds.Length % 3; i < 3; i++) row!.AddView(new View(c), new LinearLayout.LayoutParams(0, 1, 1));   // an empty slot: 1 px tall
 
-        // the selected bubble
+        // ---------------- the selected bubble or area
         selBox = Ui.Column(c, 8);
         selBox.Background = Ui.Round(c, Ui.Field, 10);
         int p = Ui.Dp(c, 10);
         selBox.SetPadding(p, p, p, p);
-        selTitle = Ui.Title(c, "", 14);
+        selTitle = Ui.Title(c, "", 13);
         selBox.AddView(selTitle);
-        var modes = Ui.Row(c, 4);
+
+        modesRow = Ui.Row(c, 4);
         foreach (var m in new[] { PressMode.Hold, PressMode.Repeat, PressMode.Once, PressMode.Off })
         {
-            var mb = Ui.Button(c, m == PressMode.Repeat ? "Every…" : m.ToString(), false, () => SetMode(m), 12);
+            var mb = Ui.Button(c, m == PressMode.Repeat ? "Every…" : m.ToString(), false, () => SetMode(m), 11);
             modeButtons[m] = mb;
-            modes.AddView(mb, Ui.Weight());
+            modesRow.AddView(mb, Ui.Weight());
         }
-        selBox.AddView(modes, Ui.Wide());
+        selBox.AddView(modesRow, Ui.Wide());
         everyRow = Ui.Row(c, 6);
         everyRow.AddView(Ui.Text(c, "every", 13, Ui.Soft));
         everyText = Ui.Text(c, "", 14, Color.White, true);
@@ -90,19 +91,43 @@ sealed class Editor
         everyRow.AddView(Ui.Button(c, "−", false, () => StepEvery(-1), 14));
         everyRow.AddView(Ui.Button(c, "+", false, () => StepEvery(+1), 14));
         selBox.AddView(everyRow, Ui.Wide());
-        var selButtons = Ui.Row(c, 6);
-        selButtons.AddView(Ui.Button(c, "Test this tap", false, TestTap, 12), Ui.Weight());
-        var remove = Ui.Button(c, "Remove", false, RemoveSelected, 12);
+        tapButtons = Ui.Row(c, 6);
+        tapButtons.AddView(Ui.Button(c, "Test this tap", false, () => _ = Test(TestTap), 11), Ui.Weight());
+        selBox.AddView(tapButtons, Ui.Wide());
+
+        // camera area: the camera fix after a teleport (the one route to edit)
+        camBox = Ui.Column(c, 6);
+        camBox.AddView(Ui.Text(c, "Drag the box over the open ground where you turn the view; drag its corner to size it. " +
+                                  "After a teleport the Assistant does these steps on it, in order, to set the view the same way every time:", 11, Ui.Muted));
+        stepsList = Ui.Column(c, 4);
+        camBox.AddView(stepsList, Ui.Wide());
+        var addOps1 = Ui.Row(c, 4);
+        foreach (var (op, label) in new[] { (CamOp.Left, "← drag"), (CamOp.Right, "drag →"), (CamOp.Up, "↑ drag"), (CamOp.Down, "↓ drag") })
+            addOps1.AddView(Ui.Button(c, label, false, () => AddStep(op), 11), Ui.Weight());
+        camBox.AddView(addOps1, Ui.Wide());
+        var addOps2 = Ui.Row(c, 4);
+        addOps2.AddView(Ui.Button(c, "+ Zoom in", false, () => AddStep(CamOp.ZoomIn), 11), Ui.Weight());
+        addOps2.AddView(Ui.Button(c, "+ Zoom out", false, () => AddStep(CamOp.ZoomOut), 11), Ui.Weight());
+        camBox.AddView(addOps2, Ui.Wide());
+        camBox.AddView(Ui.Button(c, "Test the camera fix", false, () => _ = Test(TestCamera), 12), Ui.Wide());
+        selBox.AddView(camBox, Ui.Wide());
+
+        // move pad
+        padBox = Ui.Column(c, 6);
+        padBox.AddView(Ui.Text(c, "Put the middle on the game's move pad, and drag the ring's edge to how far the stick goes. Labyrinth and Den runs walk with it.", 11, Ui.Muted));
+        padBox.AddView(Ui.Button(c, "Test: walk forward 1 s", false, () => _ = Test(TestPad), 12), Ui.Wide());
+        selBox.AddView(padBox, Ui.Wide());
+
+        var remove = Ui.Button(c, "Remove", false, RemoveSelected, 11);
         remove.SetTextColor(Color.ParseColor("#FF8A8E"));
-        selButtons.AddView(remove, Ui.Weight());
-        selBox.AddView(selButtons, Ui.Wide());
+        selBox.AddView(remove, Ui.Wide());
         selBox.Visibility = ViewStates.Gone;
         body.AddView(selBox, Ui.Wide());
 
         count = Ui.Text(c, "", 12, Ui.Soft);
         var countRow = Ui.Row(c, 6);
         countRow.AddView(count, Ui.Weight());
-        var clear = Ui.Button(c, "Remove all", false, RemoveAll, 12);
+        var clear = Ui.Button(c, "Remove all", false, RemoveAll, 11);
         clear.SetTextColor(Color.ParseColor("#FF8A8E"));
         countRow.AddView(clear);
         body.AddView(countRow, Ui.Wide());
@@ -111,12 +136,15 @@ sealed class Editor
         foot.AddView(Ui.Button(c, "Cancel", false, close, 13), Ui.Weight());
         foot.AddView(Ui.Button(c, "Save", true, Save, 13), Ui.Weight());
         body.AddView(foot, Ui.Wide());
-        panel.AddView(body, Ui.Wide());
+
+        var scroller = new ScrollView(c);
+        scroller.AddView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        panel.AddView(scroller, Ui.Wide());
 
         fold.Click += (_, _) =>
         {
-            body.Visibility = body.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
-            fold.Text = body.Visibility == ViewStates.Visible ? "–" : "+";
+            scroller.Visibility = scroller.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
+            fold.Text = scroller.Visibility == ViewStates.Visible ? "–" : "+";
         };
 
         panelRight = TapService.Prefs.GetBoolean("editor_right", false);
@@ -125,20 +153,20 @@ sealed class Editor
         // ---------------- the bubbles (placed once the window knows where it is on the screen)
         Root.Post(() =>
         {
-            foreach (var b in this.layout.Bubbles) AddView(b);
+            // areas first, so bubbles sit on top of them
+            foreach (var b in this.layout.Bubbles.OrderBy(x => x.IsArea ? 0 : 1)) AddView(b);
             UpdateCount();
         });
-        // a tap on the empty screen unselects
         Root.Click += (_, _) => Select(null);
     }
 
     FrameLayout.LayoutParams PanelLp()
     {
-        var lp = new FrameLayout.LayoutParams(Ui.Dp(c, 270), ViewGroup.LayoutParams.WrapContent)
+        var lp = new FrameLayout.LayoutParams(Ui.Dp(c, 290), ViewGroup.LayoutParams.WrapContent)
         {
             Gravity = (panelRight ? GravityFlags.Right : GravityFlags.Left) | GravityFlags.Top
         };
-        int m = Ui.Dp(c, 12);
+        int m = Ui.Dp(c, 10);
         lp.SetMargins(m, m, m, m);
         return lp;
     }
@@ -150,14 +178,30 @@ sealed class Editor
         panel.LayoutParameters = PanelLp();
     }
 
-    // ------------------------------------------------------------------ bubbles
+    // ------------------------------------------------------------------ bubbles and areas
     void AddBubble(BubbleKind k)
     {
-        // a new bubble starts in the middle of the screen, a little apart from the last new one
         Root.GetLocationOnScreen(loc);
-        float x = loc[0] + Root.Width / 2f + (views.Count % 5) * Ui.Dp(c, 14);
-        float y = loc[1] + Root.Height / 2f + (views.Count % 5) * Ui.Dp(c, 14);
-        var b = Bubble.New(k, x, y);
+        float w = Root.Width, h = Root.Height;
+        Bubble b;
+        if (k == BubbleKind.Camera)
+        {
+            if (layout.Find(k) is { } had) { Select(views.FirstOrDefault(v => v.Bubble == had)); return; }      // one camera area
+            b = Bubble.New(k, loc[0] + w * 0.6f, loc[1] + h * 0.42f);
+            b.W = w * 0.42f; b.H = h * 0.5f;
+        }
+        else if (k == BubbleKind.MovePad)
+        {
+            if (layout.Find(k) is { } had) { Select(views.FirstOrDefault(v => v.Bubble == had)); return; }      // one move pad
+            b = Bubble.New(k, loc[0] + Math.Min(w, h) * 0.3f, loc[1] + h * 0.72f);
+            b.W = Ui.Dp(c, 62);
+        }
+        else
+        {
+            // a new bubble starts in the middle of the screen, a little apart from the last new one
+            int n = views.Count(v => v is BubbleView);
+            b = Bubble.New(k, loc[0] + w / 2f + (n % 5) * Ui.Dp(c, 14), loc[1] + h / 2f + (n % 5) * Ui.Dp(c, 14));
+        }
         layout.Bubbles.Add(b);
         layout.Relabel();
         foreach (var v in views) v.Invalidate();
@@ -165,15 +209,16 @@ sealed class Editor
         UpdateCount();
     }
 
-    BubbleView AddView(Bubble b)
+    ItemView AddView(Bubble b)
     {
-        var v = new BubbleView(c, b);
+        ItemView v = b.IsArea ? new AreaView(c, b) : new BubbleView(c, b);
         Root.AddView(v, new FrameLayout.LayoutParams(size, size));
         views.Add(v);
         Place(v);
+        foreach (var x in views.Where(x => x is BubbleView)) x.BringToFront();
         panel.BringToFront();
 
-        float downX = 0, downY = 0, startX = 0, startY = 0; bool moved = false;
+        float downX = 0, downY = 0, startX = 0, startY = 0, startW = 0, startH = 0; bool moved = false, resizing = false;
         int slop = ViewConfiguration.Get(c)!.ScaledTouchSlop;
         v.Touch += (_, e) =>
         {
@@ -181,14 +226,22 @@ sealed class Editor
             switch (ev.ActionMasked)
             {
                 case MotionEventActions.Down:
-                    downX = ev.RawX; downY = ev.RawY; startX = b.X; startY = b.Y; moved = false;
+                    downX = ev.RawX; downY = ev.RawY; startX = b.X; startY = b.Y; startW = b.W; startH = b.H; moved = false;
+                    resizing = v is AreaView av && av.OnHandle(ev.GetX(), ev.GetY());
                     Select(v);
                     break;
                 case MotionEventActions.Move:
                     float dx = ev.RawX - downX, dy = ev.RawY - downY;
                     if (!moved && Math.Abs(dx) < slop && Math.Abs(dy) < slop) break;
                     moved = true;
-                    b.X = startX + dx; b.Y = startY + dy;
+                    if (resizing && b.Kind == BubbleKind.Camera)
+                    {
+                        // the top-left corner stays put; the bottom-right follows the finger
+                        b.W = Math.Max(Ui.Dp(c, 80), startW + dx); b.H = Math.Max(Ui.Dp(c, 60), startH + dy);
+                        b.X = startX - startW / 2 + b.W / 2; b.Y = startY - startH / 2 + b.H / 2;
+                    }
+                    else if (resizing) b.W = Math.Max(Ui.Dp(c, 24), startW + (dx + dy) / 2);
+                    else { b.X = startX + dx; b.Y = startY + dy; }
                     Place(v);
                     break;
             }
@@ -197,21 +250,27 @@ sealed class Editor
         return v;
     }
 
-    /// <summary>Puts the view so that its centre is on the bubble's screen point.</summary>
-    void Place(BubbleView v)
+    /// <summary>Puts the view so that its centre is on the bubble's screen point (areas: sized to the area).</summary>
+    void Place(ItemView v)
     {
         Root.GetLocationOnScreen(loc);
-        v.TranslationX = v.Bubble.X - loc[0] - size / 2f;
-        v.TranslationY = v.Bubble.Y - loc[1] - size / 2f;
+        var b = v.Bubble;
+        float w = size, h = size;
+        if (b.Kind == BubbleKind.Camera) { w = b.W; h = b.H; }
+        else if (b.Kind == BubbleKind.MovePad) { w = h = b.W * 2 + Ui.Dp(c, 16); }
+        var lp = v.LayoutParameters;
+        if (lp != null && (lp.Width != (int)w || lp.Height != (int)h)) { lp.Width = (int)w; lp.Height = (int)h; v.LayoutParameters = lp; }
+        v.TranslationX = b.X - loc[0] - w / 2f;
+        v.TranslationY = b.Y - loc[1] - h / 2f;
     }
 
-    void Select(BubbleView? v)
+    void Select(ItemView? v)
     {
         selected = v;
         foreach (var x in views) x.Selected = x == v;
         if (v == null) { selBox.Visibility = ViewStates.Gone; return; }
         selBox.Visibility = ViewStates.Visible;
-        // a folded panel stays folded while bubbles are moved; unfold it (+) to change the selected bubble
+        // a folded panel stays folded while bubbles are moved; unfold it (+) to change the selected one
         ShowSelected();
     }
 
@@ -219,11 +278,17 @@ sealed class Editor
     {
         if (selected == null) return;
         var b = selected.Bubble;
-        selTitle.Text = b.Label + " · " + Bubble.Name(b.Kind) + " · " + b.Describe();
+        bool area = b.IsArea;
+        selTitle.Text = area ? Bubble.Name(b.Kind).ToUpperInvariant() : b.Label + " · " + Bubble.Name(b.Kind) + " · " + b.Describe();
+        modesRow.Visibility = area ? ViewStates.Gone : ViewStates.Visible;
+        tapButtons.Visibility = area ? ViewStates.Gone : ViewStates.Visible;
+        camBox.Visibility = b.Kind == BubbleKind.Camera ? ViewStates.Visible : ViewStates.Gone;
+        padBox.Visibility = b.Kind == BubbleKind.MovePad ? ViewStates.Visible : ViewStates.Gone;
         foreach (var (m, btn) in modeButtons)
             btn.Background = m == b.Mode ? Ui.Round(c, Ui.Red, 9) : Ui.Round(c, Color.Transparent, 9, Color.ParseColor("#3A3A40"));
-        everyRow.Visibility = b.Mode == PressMode.Repeat ? ViewStates.Visible : ViewStates.Gone;
+        everyRow.Visibility = !area && b.Mode == PressMode.Repeat ? ViewStates.Visible : ViewStates.Gone;
         everyText.Text = Bubble.Secs(b.Every);
+        if (b.Kind == BubbleKind.Camera) ShowSteps();
         selected.Invalidate();
     }
 
@@ -245,6 +310,33 @@ sealed class Editor
         ShowSelected();
     }
 
+    // ------------------------------------------------------------------ the camera fix steps
+    void AddStep(CamOp op)
+    {
+        if (layout.CamFix.Count >= 12) return;
+        layout.CamFix.Add(new CamStep { Op = op, Amount = op is CamOp.ZoomIn or CamOp.ZoomOut ? 0.6 : 0.5 });
+        ShowSteps();
+    }
+
+    void ShowSteps()
+    {
+        stepsList.RemoveAllViews();
+        if (layout.CamFix.Count == 0) { stepsList.AddView(Ui.Text(c, "No steps yet: add them below.", 12, Ui.Soft)); return; }
+        for (int i = 0; i < layout.CamFix.Count; i++)
+        {
+            var st = layout.CamFix[i];
+            var r = Ui.Row(c, 4);
+            r.AddView(Ui.Text(c, (i + 1) + ". " + st.Describe(), 12, Color.White), Ui.Weight());
+            r.AddView(Ui.Button(c, "−", false, () => { st.Amount = Math.Max(0.1, Math.Round(st.Amount - 0.1, 1)); ShowSteps(); }, 11));
+            r.AddView(Ui.Button(c, "+", false, () => { st.Amount = Math.Min(1.0, Math.Round(st.Amount + 0.1, 1)); ShowSteps(); }, 11));
+            var x = Ui.Button(c, "✕", false, () => { layout.CamFix.Remove(st); ShowSteps(); }, 11);
+            x.SetTextColor(Color.ParseColor("#FF8A8E"));
+            r.AddView(x);
+            stepsList.AddView(r, Ui.Wide());
+        }
+    }
+
+    // ------------------------------------------------------------------ removing
     void RemoveSelected()
     {
         if (selected == null) return;
@@ -262,26 +354,25 @@ sealed class Editor
         foreach (var v in views) Root.RemoveView(v);
         views.Clear();
         layout.Bubbles.Clear();
+        layout.CamFix.Clear();
         Select(null);
         UpdateCount();
     }
 
-    /// <summary>Hides the editor for a moment and presses the selected bubble once, so the member sees the game react.</summary>
-    async void TestTap()
+    // ------------------------------------------------------------------ tests (the editor gets out of the way for a moment)
+    async Task Test(Func<Task<string>> run)
     {
-        if (selected == null) return;
-        var b = selected.Bubble;
         if (!License.Allowed()) { count.Text = License.Why(); count.SetTextColor(Ui.Gold); return; }
-        // the editor must let the tap through to the game: hide it and stop it catching touches
         Root.Visibility = ViewStates.Invisible;
         Lp.Flags |= WindowManagerFlags.NotTouchable;
         try { svc.Wm.UpdateViewLayout(Root, Lp); } catch { /* gone */ }
         try
         {
             await Task.Delay(250);
-            bool ok = await svc.PressAsync(b.X, b.Y, 80);
+            string msg = await run();
             await Task.Delay(400);
-            count.Text = ok ? "Tapped " + b.Label + "." : "The tap did not go through. Try again without touching the screen.";
+            count.SetTextColor(Ui.Soft);
+            count.Text = msg;
         }
         catch (Exception ex) { count.Text = ex.Message; }
         finally
@@ -292,35 +383,68 @@ sealed class Editor
         }
     }
 
+    async Task<string> TestTap()
+    {
+        if (selected == null) return "";
+        var b = selected.Bubble;
+        bool ok = await svc.PressAsync(b.X, b.Y, 80);
+        return ok ? "Tapped " + b.Label + "." : "The tap did not go through. Try again without touching the screen.";
+    }
+
+    async Task<string> TestCamera()
+    {
+        var (w, h) = svc.ScreenSize();
+        var copy = layout.Copy();
+        copy.ScreenW = w; copy.ScreenH = h;
+        bool ok = await svc.CameraFixAsync(copy);
+        return ok ? "Camera fix done: did the view end up how you want it?" : "Add some steps first.";
+    }
+
+    async Task<string> TestPad()
+    {
+        var pad = layout.Find(BubbleKind.MovePad);
+        if (pad == null) return "";
+        bool ok = await svc.SwipeAsync(pad.X, pad.Y, pad.X, pad.Y - pad.W, 1000);
+        return ok ? "Walked forward. If not, move the pad's middle onto the game's stick." : "The drag did not go through.";
+    }
+
     void UpdateCount()
     {
         count.SetTextColor(Ui.Soft);
-        count.Text = layout.Bubbles.Count == 0 ? "No bubbles yet." : layout.Bubbles.Count + (layout.Bubbles.Count == 1 ? " bubble" : " bubbles");
+        int n = layout.Bubbles.Count(b => !b.IsArea);
+        count.Text = (n == 0 ? "No bubbles yet" : n + (n == 1 ? " bubble" : " bubbles")) +
+                     (layout.Find(BubbleKind.Camera) != null ? " · camera area" : "") + (layout.Find(BubbleKind.MovePad) != null ? " · move pad" : "");
     }
 
     void Save()
     {
         var (w, h) = svc.ScreenSize();
-        // the layout is kept in the screen size it was made on; if the screen was turned while editing, stretch it to now
+        // the layout is kept in the screen size it was made on
         layout.ScreenW = w;
         layout.ScreenH = h;
         layout.Save();
+        AppLog.Add("bubbles saved (" + layout.Bubbles.Count + ")");
         close();
     }
 }
 
-/// <summary>A bubble in the editor: a small coloured circle with its label, a ring when selected and a dot where it taps.</summary>
-sealed class BubbleView : View
+/// <summary>Something placed in the editor: a bubble or an area.</summary>
+abstract class ItemView : View
 {
     public Bubble Bubble { get; }
+    protected ItemView(Context c, Bubble b) : base(c) { Bubble = b; }
+}
+
+/// <summary>A bubble in the editor: a small coloured circle with its label, a ring when selected and a dot where it taps.</summary>
+sealed class BubbleView : ItemView
+{
     readonly Paint fill = new() { AntiAlias = true };
     readonly Paint edge = new() { AntiAlias = true };
     readonly Paint label = new() { AntiAlias = true };
     readonly Paint pin = new() { AntiAlias = true };
 
-    public BubbleView(Context c, Bubble b) : base(c)
+    public BubbleView(Context c, Bubble b) : base(c, b)
     {
-        Bubble = b;
         edge.SetStyle(Paint.Style.Stroke);
         label.Color = Color.White;
         label.TextAlign = Paint.Align.Center;
@@ -343,5 +467,61 @@ sealed class BubbleView : View
         canvas.DrawText(Bubble.Label, cx, cy - Ui.Dp(Context!, 4), label);
         // the exact point it presses
         canvas.DrawCircle(cx, cy, Ui.Dp(Context!, 2.5f), pin);
+    }
+}
+
+/// <summary>The camera area (a dashed box) or the move pad (a dashed ring with its middle); the corner dot resizes it.</summary>
+sealed class AreaView : ItemView
+{
+    readonly Paint fill = new() { AntiAlias = true }, edge = new() { AntiAlias = true }, text = new() { AntiAlias = true }, knob = new() { AntiAlias = true };
+
+    public AreaView(Context c, Bubble b) : base(c, b)
+    {
+        edge.SetStyle(Paint.Style.Stroke);
+        edge.StrokeWidth = Ui.Dp(c, 2);
+        edge.SetPathEffect(new DashPathEffect(new float[] { Ui.Dp(c, 8), Ui.Dp(c, 6) }, 0));
+        text.Color = Color.White;
+        text.TextAlign = Paint.Align.Center;
+        text.FakeBoldText = true;
+        text.TextSize = Ui.Dp(c, 11);
+        knob.Color = Ui.Gold;
+    }
+
+    float KnobR => Ui.Dp(Context!, 11);
+
+    (float x, float y) KnobAt() => Bubble.Kind == BubbleKind.Camera
+        ? (Width - KnobR - 2, Height - KnobR - 2)
+        : (Width / 2f + Bubble.W * 0.7071f, Height / 2f + Bubble.W * 0.7071f);
+
+    /// <summary>True when a touch at (x, y) in the view is on the resize dot.</summary>
+    public bool OnHandle(float x, float y)
+    {
+        var (kx, ky) = KnobAt();
+        return Math.Abs(x - kx) < KnobR * 2 && Math.Abs(y - ky) < KnobR * 2;
+    }
+
+    protected override void OnDraw(Canvas canvas)
+    {
+        base.OnDraw(canvas);
+        var col = Color.ParseColor(Bubble.Color(Bubble.Kind));
+        fill.Color = Color.Argb(40, col.R, col.G, col.B);
+        edge.Color = Selected ? Ui.Gold : Color.Argb(230, col.R, col.G, col.B);
+        float cx = Width / 2f, cy = Height / 2f;
+        if (Bubble.Kind == BubbleKind.Camera)
+        {
+            float r = Ui.Dp(Context!, 12), i = edge.StrokeWidth;
+            canvas.DrawRoundRect(i, i, Width - i, Height - i, r, r, fill);
+            canvas.DrawRoundRect(i, i, Width - i, Height - i, r, r, edge);
+            canvas.DrawText("CAMERA AREA", cx, cy, text);
+        }
+        else
+        {
+            canvas.DrawCircle(cx, cy, Bubble.W, fill);
+            canvas.DrawCircle(cx, cy, Bubble.W, edge);
+            canvas.DrawCircle(cx, cy, Ui.Dp(Context!, 5), knob);
+            canvas.DrawText("MOVE PAD", cx, cy - Ui.Dp(Context!, 10), text);
+        }
+        var (kx, ky) = KnobAt();
+        canvas.DrawCircle(kx, ky, KnobR * 0.6f, knob);
     }
 }
