@@ -631,8 +631,9 @@ sealed class Nav
         AppLog.Add("camera: zoomed all the way out");
         if (tiny)
         {
-            // 1.4.5: and the view is tilted up (a slow drag down), so it looks along the corridor instead of at the ground
-            float y1 = Math.Max(10, cy - h * 0.25f), y2 = Math.Min(h - 10, cy + h * 0.25f);
+            // 1.4.5: and the view is tilted up, so it looks along the corridor instead of at the ground.
+            // 1.4.6: by a slow drag UP (a drag down tilted it toward the ground on the cloud phone)
+            float y1 = Math.Min(h - 10, cy + h * 0.25f), y2 = Math.Max(10, cy - h * 0.25f);
             for (int i = 0; i < 2; i++) { await svc.SwipeAsync(cx, y1, cx, y2, 900); await Task.Delay(320, ct); }
             AppLog.Add("camera: tilted up");
         }
