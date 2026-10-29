@@ -72,7 +72,7 @@ public class TapService : AccessibilityService
     /// <summary>The whole screen in pixels as it is turned right now.</summary>
     public (int w, int h) ScreenSize()
     {
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.R)
+        if (OperatingSystem.IsAndroidVersionAtLeast(30))
         {
             var b = Wm.CurrentWindowMetrics.Bounds;
             return (b.Width(), b.Height());

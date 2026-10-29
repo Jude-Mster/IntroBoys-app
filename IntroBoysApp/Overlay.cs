@@ -42,7 +42,7 @@ sealed class Overlay
         {
             Gravity = GravityFlags.Top | GravityFlags.Left
         };
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.P) lp.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.ShortEdges;
+        if (OperatingSystem.IsAndroidVersionAtLeast(28)) lp.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.ShortEdges;
         return lp;
     }
 

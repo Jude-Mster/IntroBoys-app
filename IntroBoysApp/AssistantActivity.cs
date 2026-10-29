@@ -210,7 +210,7 @@ public class AssistantActivity : Activity
                 OpenSite(url);
             }), signing.Token);
         }
-        catch (OperationCanceledException) { License.Fail("Sign-in cancelled."); }
+        catch (System.OperationCanceledException) { License.Fail("Sign-in cancelled."); }
         catch (Exception ex) { License.Fail("Sign-in failed: " + ex.Message); }
         finally
         {

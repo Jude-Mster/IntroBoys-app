@@ -79,7 +79,7 @@ static class Ui
     {
         var l = new LinearLayout(c) { Orientation = Orientation.Vertical };
         l.ShowDividers = ShowDividers.Middle;
-        l.DividerDrawable = Gap(c, gapDp, true);
+        l.SetDividerDrawable(Gap(c, gapDp, true));
         return l;
     }
 
@@ -88,7 +88,7 @@ static class Ui
         var l = new LinearLayout(c) { Orientation = Orientation.Horizontal };
         l.SetGravity(GravityFlags.CenterVertical);
         l.ShowDividers = ShowDividers.Middle;
-        l.DividerDrawable = Gap(c, gapDp, false);
+        l.SetDividerDrawable(Gap(c, gapDp, false));
         return l;
     }
 

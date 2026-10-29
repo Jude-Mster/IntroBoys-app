@@ -116,7 +116,7 @@ static class Runner
                 await Task.Delay(GapMs, ct);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (System.OperationCanceledException) { }
         catch (LicenseException ex) { Stop("Stopped: " + ex.Message); }
         catch (Exception ex) { Stop("Stopped: " + ex.Message); }
     }
