@@ -13,7 +13,7 @@ public readonly record struct Position(bool Ok, int X, int Y, string Map)
 }
 
 /// <summary>
-/// Reading the phone game's screen (with screen sharing on): the position under the mini-map, the map name, and the boss HP bar in the
+/// Reading the phone game's screen (through the tap service, or screen sharing): the position under the mini-map, the map name, and the boss HP bar in the
 /// box the member placed over it. The latest readings are kept for the floating panel and the website.
 /// </summary>
 static class Screen
@@ -28,7 +28,7 @@ static class Screen
     /// <summary>The position and map name (Ok false when they can't be read: sharing off, a loading screen, the mini-map closed).</summary>
     public static async Task<Position> PositionAsync()
     {
-        var f = Capture.Snap(C);
+        var f = await Capture.SnapAsync(C);
         if (f == null) return default;
         // the mini-map title and the numbers under it: the top right corner
         int x = (int)(f.W * 0.80), y = (int)(f.H * 0.035), w = f.W - x, h = (int)(f.H * 0.10);
@@ -52,12 +52,33 @@ static class Screen
 
     /// <summary>
     /// The boss HP bar, read in the box the member placed over it (Bubbles, + Boss HP bar): the share of the bar that is filled red,
-    /// 0..1, or -1 when no bar is there (no boss targeted). Returns -2 when there is no box or no picture.
+    /// 0..1, or -1 when there is no red. Returns -2 when there is no box or no picture.
     /// </summary>
-    public static double BossHp(BubbleLayout layout)
+    public static async Task<double> BossHpAsync(BubbleLayout layout) => Hp(layout, await Capture.SnapAsync(C));
+
+    /// <summary>
+    /// Is a boss targeted? Red in the bar, or (the bar can read empty while the boss lives) the target's name just above the bar.
+    /// </summary>
+    public static async Task<(double hp, bool there)> BossAsync(BubbleLayout layout, bool lookForName)
+    {
+        var f = await Capture.SnapAsync(C);
+        double hp = Hp(layout, f);
+        if (hp > 0 || !lookForName || f == null) return (hp, hp > 0);
+        var box = layout.Find(BubbleKind.BossBar);
+        if (box == null) return (hp, false);
+        var (cx, cy) = layout.At(box, f.W, f.H);
+        var (bw, bh) = layout.SizeAt(box, f.W, f.H);
+        int x = (int)(cx - bw * 0.8), y = (int)(cy - bh / 2 - Math.Max(bh * 4, f.H * 0.05)), w = (int)(bw * 1.6), h = (int)(cy + bh * 1.5) - y;
+        var lines = await Ocr.ReadAsync(f, x, y, w, h, 2);
+        bool name = lines.Any(l => l.Text.Count(char.IsLetter) >= 3);
+        return (hp, name);
+    }
+
+    public static double BossHp(BubbleLayout layout) => Hp(layout, Capture.Snap(C));
+
+    static double Hp(BubbleLayout layout, Frame? f)
     {
         var box = layout.Find(BubbleKind.BossBar);
-        var f = Capture.Snap(C);
         if (box == null || f == null) { LastHp = -1; return -2; }
         var (cx, cy) = layout.At(box, f.W, f.H);
         var (bw, bh) = layout.SizeAt(box, f.W, f.H);
@@ -85,7 +106,7 @@ static class Screen
     /// <summary>Lines of text in a part of the screen given as fractions of its size (the teleport list, buttons ...).</summary>
     public static async Task<List<TextLine>> TextAsync(double fx, double fy, double fw, double fh, int scale = 1)
     {
-        var f = Capture.Snap(C);
+        var f = await Capture.SnapAsync(C);
         if (f == null) return new();
         return await Ocr.ReadAsync(f, (int)(f.W * fx), (int)(f.H * fy), (int)(f.W * fw), (int)(f.H * fh), scale);
     }

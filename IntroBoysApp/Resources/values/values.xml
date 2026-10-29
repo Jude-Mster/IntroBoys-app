@@ -5,7 +5,7 @@
   <color name="ink">#0E0E10</color>
 
   <string name="tap_service_label">IntroBoys Assistant taps</string>
-  <string name="tap_service_desc">Lets the IntroBoys Assistant press the game buttons you placed bubbles on (attack, buffs, auto loot). It only taps where your bubbles are, only while you run it, and only with an active Assistant license. It does not read your messages or other apps.</string>
+  <string name="tap_service_desc">Lets the IntroBoys Assistant press the game buttons you placed bubbles on (attack, buffs, auto loot). It only taps where your bubbles are, and looks at the game screen (the position under the mini-map and the boss HP bar), only while you run it and only with an active Assistant license. Nothing is saved or sent anywhere.</string>
 
   <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
     <item name="android:windowBackground">@color/ink</item>

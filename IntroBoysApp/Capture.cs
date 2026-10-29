@@ -102,6 +102,17 @@ static class Capture
     /// The latest picture of the whole screen (screen pixels), or null when sharing is off or nothing came yet. When the screen has not
     /// changed since the last look, the last picture is given again. A picture is at most 120 ms old when a new one is available.
     /// </summary>
+    /// <summary>The Assistant can look at the screen: through screen sharing, or (Android 11+) through the tap service.</summary>
+    public static bool CanSee => On || (TapService.Instance != null && OperatingSystem.IsAndroidVersionAtLeast(30));
+
+    /// <summary>The latest picture of the screen: screen sharing when it is on, otherwise a screenshot through the tap service.</summary>
+    public static async Task<Frame?> SnapAsync(Context c)
+    {
+        if (On) { var f = Snap(c); if (f != null) return f; }
+        var svc = TapService.Instance;
+        return svc == null ? null : await svc.ShotAsync();
+    }
+
     public static Frame? Snap(Context c)
     {
         lock (gate)
@@ -131,10 +142,10 @@ static class Capture
     }
 
     /// <summary>A small JPEG of the screen for the live view (base64), or null with the reason.</summary>
-    public static (string? b64, string why) Jpeg(Context c, int width = 640, int quality = 55)
+    public static async Task<(string? b64, string why)> JpegAsync(Context c, int width = 640, int quality = 55)
     {
-        if (!On) return (null, "the phone is not sharing its screen with the Assistant (tap Allow on \"See the game\" in the app)");
-        var f = Snap(c);
+        if (!CanSee) return (null, "the Assistant can't see the screen (switch on its taps, or Live record on the panel)");
+        var f = await SnapAsync(c);
         if (f == null) return (null, "no picture from the screen yet");
         Bitmap? full = null;
         try

@@ -428,18 +428,18 @@ sealed class Editor
     /// <summary>Reads the boss HP bar in the box as it is placed now (needs screen sharing).</summary>
     void ReadBar()
     {
-        if (!Capture.On) { barRead.Text = "Screen sharing is off: tap Screen on the floating panel first."; return; }
+        if (!Capture.CanSee) { barRead.Text = "The Assistant can't see the screen on this phone: tap Live record on the floating panel first."; return; }
         var (w, h) = svc.ScreenSize();
         var copy = layout.Copy();
         copy.ScreenW = w; copy.ScreenH = h;
         // the editor's own dim colour is drawn over the game: hide it for the reading
         Root.Visibility = ViewStates.Invisible;
-        Root.PostDelayed(() =>
+        Root.PostDelayed(async () =>
         {
-            double hp = Screen.BossHp(copy);
+            var (hp, there) = await Screen.BossAsync(copy, true);
             Root.Visibility = ViewStates.Visible;
-            barRead.Text = hp >= 0 ? "Boss HP: " + Math.Round(hp * 100) + "%" : hp == -1 ? "No red bar in the box." : "Place the box first.";
-        }, 350);
+            barRead.Text = hp >= 0 ? "Boss HP: " + Math.Round(hp * 100) + "%" : there ? "A target is there, but no red in the box: move the box onto the red bar." : hp == -1 ? "No red bar in the box (target the boss first)." : "Place the box first.";
+        }, 400);
     }
 
     void UpdateCount()

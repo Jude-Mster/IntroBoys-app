@@ -233,6 +233,60 @@ public class TapService : AccessibilityService
         return done.Task;
     }
 
+    // ------------------------------------------------------------------ looking at the screen (Android 11+): no screen sharing needed
+    long shotAt;
+    Frame? shot;
+    readonly SemaphoreSlim shooting = new(1, 1);
+
+    /// <summary>
+    /// A picture of the whole screen through the accessibility service (Android allows about 3 a second, so a picture under 0.35 s old is
+    /// given again). Null on Android 10 or when Android refuses.
+    /// </summary>
+    public async Task<Frame?> ShotAsync()
+    {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(30)) return null;
+        await shooting.WaitAsync();
+        try
+        {
+            if (shot != null && System.Environment.TickCount64 - shotAt < 350) return shot;
+            var done = new TaskCompletionSource<Frame?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Main.Post(() =>
+            {
+                try { TakeScreenshot(0, MainExecutor!, new Shot(done)); }
+                catch { done.TrySetResult(null); }
+            });
+            var f = await Task.WhenAny(done.Task, Task.Delay(2500)) == done.Task ? await done.Task : null;
+            if (f != null) { shot = f; shotAt = System.Environment.TickCount64; }
+            return f ?? shot;
+        }
+        finally { shooting.Release(); }
+    }
+
+    sealed class Shot : Java.Lang.Object, ITakeScreenshotCallback
+    {
+        readonly TaskCompletionSource<Frame?> done;
+        public Shot(TaskCompletionSource<Frame?> done) { this.done = done; }
+        public void OnFailure(int errorCode) => done.TrySetResult(null);
+        public void OnSuccess(ScreenshotResult screenshot)
+        {
+            try
+            {
+                using var hb = screenshot.HardwareBuffer;
+                using var hw = Android.Graphics.Bitmap.WrapHardwareBuffer(hb, screenshot.ColorSpace);
+                if (hw == null) { done.TrySetResult(null); return; }
+                using var bmp = hw.Copy(Android.Graphics.Bitmap.Config.Argb8888!, false)!;
+                int w = bmp.Width, h = bmp.Height;
+                var buf = Java.Nio.ByteBuffer.AllocateDirect(w * h * 4)!;
+                bmp.CopyPixelsToBuffer(buf);
+                buf.Rewind();
+                var bytes = new byte[w * h * 4];
+                buf.Get(bytes);
+                done.TrySetResult(new Frame(bytes, w, h, w * 4, System.Environment.TickCount64));
+            }
+            catch { done.TrySetResult(null); }
+        }
+    }
+
     sealed class Result : GestureResultCallback
     {
         readonly TaskCompletionSource<bool> done;

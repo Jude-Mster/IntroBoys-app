@@ -21,6 +21,34 @@ static class RunEngine
     const double GateCountdown = 30;            // the Labyrinth's gate opens 30 s after you come in
     static readonly (int x, int y) LabyEntrance = (3595, 34153);
     static DateTime arrivedAt;
+    static bool countdownDone;            // the 30 s gate countdown is only for the first run of a session
+
+    /// <summary>
+    /// The PC Assistant's recorded ways to each boss (route 1..5 = Labyrinth bosses, 6 = the Den boss), as map coordinates, built into
+    /// the app (Assets/routes.json). Empty when there are none: then the walk goes straight and round what is in the way.
+    /// </summary>
+    static List<(int x, int y)>[]? routes;
+    static List<(int x, int y)> Route(int i)
+    {
+        if (routes == null)
+        {
+            routes = Enumerable.Range(0, 6).Select(_ => new List<(int x, int y)>()).ToArray();
+            try
+            {
+                using var st = Android.App.Application.Context.Assets!.Open("routes.json");
+                using var doc = System.Text.Json.JsonDocument.Parse(st);
+                int n = 0;
+                foreach (var r in doc.RootElement.GetProperty("routes").EnumerateArray())
+                {
+                    if (n >= 6) break;
+                    foreach (var pt in r.EnumerateArray()) routes[n].Add((pt[0].GetInt32(), pt[1].GetInt32()));
+                    n++;
+                }
+            }
+            catch { /* no routes built in */ }
+        }
+        return i >= 0 && i < routes.Length ? routes[i] : new();
+    }
 
     /// <summary>Why a Labyrinth / Den run can't start yet (null when everything is in place).</summary>
     public static string? Missing(BubbleLayout layout)
@@ -38,23 +66,8 @@ static class RunEngine
     {
         var nav = new Nav(svc, layout);
         bool den = mode == RunMode.Den;
-        // the run reads the screen (position, boss bar): ask Android for the screen when it isn't shared yet
-        if (!Capture.On)
-        {
-            AppLog.Add("screen: not shared yet, asking Android (choose Entire screen)");
-            svc.Main.Post(() => CaptureActivity.Request(svc));
-            var until = DateTime.UtcNow.AddSeconds(30);
-            while (!Capture.On && DateTime.UtcNow < until) await Task.Delay(500, ct);
-            if (!Capture.On)
-            {
-                AppLog.Add("screen: not shared, so the position and the boss bar can't be read: auto attack here instead");
-                Runner.SetPhase("auto attack (screen not shared)");
-                string? why = await Runner.PressUntil(svc, layout, () => false, ct);
-                if (why != null) throw new Exception(why);
-                return;
-            }
-            await Task.Delay(800, ct);
-        }
+        countdownDone = false;
+        if (!Capture.CanSee) throw new Exception("this phone (Android 10) needs Live record on to read the screen: tap Live record on the panel");
         int kicks = 0;
         for (int run = 1; runs == 0 || run <= runs; run++)
         {
@@ -84,10 +97,10 @@ static class RunEngine
             }
 
             bool kicked = false;
-            if (den) kicked = !await BossAsync(svc, layout, nav, DenSpot, "the Den boss", true, ct);
+            if (den) kicked = !await BossAsync(svc, layout, nav, DenSpot, "the Den boss", true, ct, 5);
             else
                 for (int b = first; b < LabySpots.Length && !kicked; b++)
-                    kicked = !await BossAsync(svc, layout, nav, LabySpots[b], $"boss {b + 1}", false, ct);
+                    kicked = !await BossAsync(svc, layout, nav, LabySpots[b], $"boss {b + 1}", false, ct, b);
 
             if (kicked)
             {
@@ -164,9 +177,10 @@ static class RunEngine
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
-        if (!den)
+        if (!den && !countdownDone)
         {
-            // the gate opens 30 s after coming in: wait it out, then run
+            countdownDone = true;
+            // the gate opens 30 s after coming in (the first run): wait it out, then run
             AppLog.Add("gate: waiting for the 30 s countdown");
             while (true)
             {
@@ -182,15 +196,24 @@ static class RunEngine
 
     // ------------------------------------------------------------------ one boss
     /// <summary>Walks to the spot, waits for the boss, fights it, loots. False when the character is no longer in the dungeon.</summary>
-    static async Task<bool> BossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, bool den, CancellationToken ct)
+    static async Task<bool> BossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, bool den, CancellationToken ct, int routeIndex = -1)
     {
         Runner.SetPhase("walking to " + name);
-        for (int tries = 0; tries < 3; tries++)
+        for (int tries = 0; tries < 4; tries++)
         {
-            if (await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) break;
+            var way = Route(routeIndex);
+            if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) break;
             var p = nav.Last;
             if (p.Ok && !(den ? p.InDen : p.InLabyrinth) && p.Map.Length > 0) return false;
-            AppLog.Add($"walk to {name}: trying again ({tries + 1})");
+            // the character won't move: usually a boss or monster is still fighting it
+            var (hp, there) = await Screen.BossAsync(layout, true);
+            if (there)
+            {
+                AppLog.Add($"walk to {name}: something is still fighting us, finishing it first");
+                await FightAsync(svc, layout, "the target", ct);
+                await LootAsync(svc, layout, ct);
+            }
+            Runner.SetPhase($"walking to {name} (again)");
         }
         int fights = 0;
         while (true)
@@ -220,7 +243,7 @@ static class RunEngine
         while (DateTime.UtcNow < until)
         {
             ct.ThrowIfCancellationRequested();
-            if (Screen.BossHp(layout) > 0) { AppLog.Add($"{name}: HP bar up"); return true; }
+            if (await Screen.BossHpAsync(layout) > 0) { AppLog.Add($"{name}: HP bar up"); return true; }
             if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(3); }
             if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
             await Task.Delay(300, ct);
@@ -228,36 +251,55 @@ static class RunEngine
         return false;
     }
 
-    /// <summary>Attacks (the member's bubbles, like auto attack) until the boss's HP bar has gone away.</summary>
+    /// <summary>
+    /// Attacks (the member's bubbles, like auto attack) until the boss is dead. Dead = no red in the bar AND no target name for a while
+    /// (the bar can read empty while the boss lives): 1.5 s after it was nearly dead, 3 s otherwise, 5 s in the first 8 s of a fight;
+    /// then the target is pressed once more to be sure.
+    /// </summary>
     static async Task FightAsync(TapService svc, BubbleLayout layout, string name, CancellationToken ct)
     {
         Runner.SetPhase("fighting " + name);
-        double lo = 1, hi = 0;
-        DateTime? goneSince = null;
-        bool dead = false;
         var start = DateTime.UtcNow;
-        using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        // watch the bar while the bubbles are pressed
-        var watcher = Task.Run(async () =>
-        {
-            while (!watch.IsCancellationRequested)
-            {
-                double hp = Screen.BossHp(layout);
-                if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); goneSince = null; }
-                else if (hp == -1) goneSince ??= DateTime.UtcNow;
-                bool nearDead = lo <= 0.15 && hi >= 0.30;
-                if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= (nearDead ? NearDeadGoneSecs : GoneSecs)) { dead = true; return; }
-                if ((DateTime.UtcNow - start).TotalSeconds > FightTimeout) { AppLog.Add($"{name}: fight took too long, going on"); dead = true; return; }
-                try { await Task.Delay(250, watch.Token); } catch { return; }
-            }
-        });
         var fightLayout = layout.Copy();
-        // only the fight buttons (no teleport / return in a fight)
-        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return);
-        string? why = await Runner.PressUntil(svc, fightLayout, () => dead, ct);
-        watch.Cancel();
-        await watcher;
-        if (why != null && !dead) throw new Exception(why);
+        // only the fight buttons (no teleport / return / target spam in a fight: target is pressed when it is needed)
+        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return or BubbleKind.Target);
+        while (true)
+        {
+            double lo = 1, hi = 0;
+            DateTime? goneSince = null;
+            bool dead = false, lastThere = true;
+            using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var watcher = Task.Run(async () =>
+            {
+                while (!watch.IsCancellationRequested)
+                {
+                    var (hp, there) = await Screen.BossAsync(layout, true);
+                    lastThere = there;
+                    if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); } }
+                    else goneSince ??= DateTime.UtcNow;
+                    double secs = (DateTime.UtcNow - start).TotalSeconds;
+                    double need = lo <= 0.15 && hi >= 0.30 ? 1.5 : 3.0;
+                    if (secs < 8) need = Math.Max(need, 5);
+                    if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= need) { dead = true; return; }
+                    if (secs > FightTimeout) { AppLog.Add($"{name}: fight took too long, going on"); dead = true; return; }
+                    try { await Task.Delay(200, watch.Token); } catch { return; }
+                }
+            });
+            string? why = await Runner.PressUntil(svc, fightLayout, () => dead, ct);
+            watch.Cancel();
+            try { await watcher; } catch { /* stopped */ }
+            if (why != null && !dead) throw new Exception(why);
+            // make sure: target once more; a boss that is still there shows its bar again
+            await Press(svc, layout, BubbleKind.Target);
+            await Task.Delay(1200, ct);
+            var (hp2, there2) = await Screen.BossAsync(layout, true);
+            if (there2 && (DateTime.UtcNow - start).TotalSeconds < FightTimeout)
+            {
+                AppLog.Add($"{name}: still there ({(hp2 >= 0 ? Math.Round(hp2 * 100) + "%" : "no red")}), attacking on");
+                continue;
+            }
+            break;
+        }
         AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s)");
     }
 

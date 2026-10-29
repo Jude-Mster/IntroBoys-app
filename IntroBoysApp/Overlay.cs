@@ -150,7 +150,7 @@ sealed class Overlay
         panel.AddView(row1, Ui.Wide());
         var row2 = Ui.Row(c, 6);
         row2.AddView(Ui.Button(c, "Bubbles", false, OpenEditor, 12), Ui.Weight());
-        screenBtn = Ui.Button(c, "Screen", false, ToggleScreen, 12);
+        screenBtn = Ui.Button(c, "Live record", false, ToggleScreen, 12);
         row2.AddView(screenBtn, Ui.Weight());
         row2.AddView(Ui.Button(c, "Hide", false, () => TapService.SetControlVisible(false), 12), Ui.Weight());
         panel.AddView(row2, Ui.Wide());
@@ -185,12 +185,12 @@ sealed class Overlay
         {
             if (control == null || panelBox == null || panelBox.Visibility != ViewStates.Visible) { ticking = false; return; }
             // not running: keep the position and boss bar readings live, so the member sees the reading works
-            if (!Runner.Running && Capture.On && !reading)
+            if (!Runner.Running && Capture.CanSee && !reading)
             {
                 reading = true;
                 _ = Task.Run(async () =>
                 {
-                    try { await Screen.PositionAsync(); Screen.BossHp(BubbleLayout.Load()); }
+                    try { await Screen.PositionAsync(); await Screen.BossHpAsync(BubbleLayout.Load()); }
                     finally { reading = false; }
                 });
             }
@@ -295,11 +295,11 @@ sealed class Overlay
         if (posText != null) posText.Text = "position " + Screen.LastPos;
         if (screenNote != null)
         {
-            screenNote.Text = !Capture.On ? "Screen sharing is off: tap Screen (live view on the website, and reading the screen)."
+            screenNote.Text = !Capture.CanSee ? "This phone needs Live record on to read the screen (Android 10)."
                             : !layout.Bubbles.Any(b => b.Kind == BubbleKind.BossBar) ? "Place the Boss HP bar box (Bubbles) for Labyrinth and Den runs." : "";
             screenNote.Visibility = screenNote.Text!.Length > 0 ? ViewStates.Visible : ViewStates.Gone;
         }
-        if (screenBtn != null) screenBtn.Text = Capture.On ? "Screen ✓" : "Screen";
+        if (screenBtn != null) screenBtn.Text = Capture.On ? "Live rec ✓" : "Live record";
     }
 
     // ------------------------------------------------------------------ dots where it presses

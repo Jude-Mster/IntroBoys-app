@@ -1,1 +1,1 @@
-Labyrinth: waits out the 30 s gate countdown, turns the view to the gate with smooth drags and zooms out. Runs can start before the screen is shared (Android is asked).
+Reads the game without screen sharing (Live record is optional). Fights until the boss is really dead. The 30 s gate wait only on the first run.

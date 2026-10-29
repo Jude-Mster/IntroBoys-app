@@ -39,7 +39,7 @@ static class Remote
                     if (Watching && now - lastPic >= 4)
                     {
                         lastPic = now;
-                        var (pic, why) = Capture.Jpeg(c);
+                        var (pic, why) = await Capture.JpegAsync(c);
                         if (pic != null) body["picture"] = pic; else body["picture_error"] = why;
                     }
                     var r = await License.CallSignedInAsync("remotePush", body, CancellationToken.None);
@@ -71,7 +71,7 @@ static class Remote
         ["map"] = Screen.LastMap,
         ["dungeon"] = Runner.Mode switch { RunMode.Den => "den", RunMode.Labyrinth => "labyrinth", _ => "attack" },
         ["runs"] = Runner.Runs,
-        ["game"] = Capture.On,
+        ["game"] = Capture.CanSee,
         ["cycles"] = Runner.Cycles,
         ["kills"] = Runner.Kills,
         ["presses"] = Runner.Presses,

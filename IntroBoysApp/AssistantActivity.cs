@@ -167,9 +167,9 @@ public class AssistantActivity : Activity
             "Tap Accessibility, then Installed apps (or Downloaded apps), then IntroBoys Assistant taps. Switch it on and tap Allow.");
         stepTaps.AddButton("Accessibility", true, () => Open(new Intent(Settings.ActionAccessibilitySettings)));
         setup.AddView(stepTaps.View, Ui.Wide());
-        stepScreen = new Step(c, n++, "See the game (screen sharing)",
-            "Lets the Assistant see the screen: the live view on the guild website now, and reading the boss HP bar and your position. " +
-            "Android asks each time the app starts; pick \"Entire screen\" (or the game). A small notification shows while it is on.");
+        stepScreen = new Step(c, n++, "Live record (optional)",
+            "Not needed to run: the Assistant reads the game through its taps permission. Live record (Android's screen sharing) makes the picture on " +
+            "the guild website's live view smoother, and is needed on Android 10. Android asks each time; pick \"Entire screen\".");
         stepScreen.AddButton("Allow", true, () => CaptureActivity.Request(this));
         stepScreen.AddButton("Stop", false, () => CaptureService.StopSharing(this));
         setup.AddView(stepScreen.View, Ui.Wide());

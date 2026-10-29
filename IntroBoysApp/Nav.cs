@@ -264,7 +264,7 @@ sealed class Nav
     /// Walks to (x, y) until within <paramref name="tol"/> map units. Returns true when there, false when it gave up (stuck, can't read
     /// the position, or out of time).
     /// </summary>
-    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90)
+    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true)
     {
         if (!known && !await CalibrateAsync(ct)) return false;
         var start = DateTime.UtcNow;
@@ -274,6 +274,7 @@ sealed class Nav
         AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
         var history = new List<(DateTime t, double d)>();
         int detours = 0, misses = 0, flips = 0;
+        Position firstStuck = default;
         double detour = 0;
         DateTime detourUntil = DateTime.MinValue;
         Position prev = p;
@@ -332,6 +333,12 @@ sealed class Nav
                 if (DateTime.UtcNow > detourUntil && history.Count >= 5 && (DateTime.UtcNow - history[0].t).TotalSeconds > 1.8 && history[0].d - history[^1].d < 70)
                 {
                     if (++detours > 8) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
+                    if (detours == 1) firstStuck = p;
+                    else if (detours >= 3 && firstStuck.Ok && p.Dist(firstStuck.X, firstStuck.Y) < 40)
+                    {
+                        AppLog.Add($"walk: not moving at all at {p}");
+                        return false;
+                    }
                     detour = (detours % 2 == 1 ? 1 : -1) * Math.Min(110, 50 + 15 * detours);
                     detourUntil = DateTime.UtcNow.AddMilliseconds(900 + 150 * detours);
                     AppLog.Add($"walk: stuck at {p}, going round ({(int)detour}°)");
@@ -339,7 +346,30 @@ sealed class Nav
                 }
             }
         }
-        finally { await stick.ReleaseAsync(); }
+        finally { if (release) await stick.ReleaseAsync(); }
+    }
+
+    /// <summary>
+    /// Follows a way through the map (the PC Assistant's recorded paths): from the nearest point ahead, point by point (one every
+    /// ~300 map units) without letting go of the stick, then the last part to (x, y).
+    /// </summary>
+    public async Task<bool> FollowAsync(IReadOnlyList<(int x, int y)> path, int x, int y, double tol, CancellationToken ct)
+    {
+        var p = await ReadAsync(ct);
+        if (!p.Ok || path.Count == 0) return await WalkToAsync(x, y, tol, ct);
+        // the nearest point of the path, then every ~300 units after it
+        int from = Enumerable.Range(0, path.Count).OrderBy(i => p.Dist(path[i].x, path[i].y)).First();
+        var legs = new List<(int x, int y)>();
+        var lastLeg = path[from];
+        for (int i = from + 1; i < path.Count; i++)
+        {
+            var q = path[i];
+            if (Math.Sqrt(Math.Pow(q.x - lastLeg.x, 2) + Math.Pow(q.y - lastLeg.y, 2)) >= 300) { legs.Add(q); lastLeg = q; }
+        }
+        AppLog.Add($"walk: following the recorded way ({legs.Count} points)");
+        foreach (var q in legs)
+            if (!await WalkToAsync(q.x, q.y, 160, ct, 40, release: false)) { await stick.ReleaseAsync(); return await WalkToAsync(x, y, tol, ct); }
+        return await WalkToAsync(x, y, tol, ct);
     }
 
     /// <summary>Keeps the character on the spot while waiting: walks back when pushed off by more than <paramref name="tol"/>.</summary>
