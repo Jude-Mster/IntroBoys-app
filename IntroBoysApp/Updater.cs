@@ -31,8 +31,44 @@ static class Updater
         catch { return 0; }
     }
 
-    /// <summary>The newer release the site offers, or null (none, or the site can't be reached).</summary>
+    /// <summary>
+    /// The newer release the site offers, or null (none, or the site can't be reached). 1.3.9: two places are asked and the newer build
+    /// wins - the file the Guild Leader links on the site (Admin, App download link; the site reads its build number and checksum from the
+    /// file itself), and /app/introboys-android.json that comes with a site release. Before, only the second was looked at, so a new file
+    /// linked on the site was never offered.
+    /// </summary>
     public static async Task<Release?> CheckAsync(Context c)
+    {
+        var a = await FromLinkAsync();
+        var b = await FromManifestAsync();
+        var best = a == null ? b : b == null ? a : (a.Code >= b.Code ? a : b);
+        return best != null && best.Code > InstalledCode(c) ? best : null;
+    }
+
+    /// <summary>The file linked in Admin (any https address: the checksum comes from the guild site and Android checks the signature).</summary>
+    static async Task<Release?> FromLinkAsync()
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, LicenseConfig.ApiBase + "/" + LicenseConfig.Function)
+            {
+                Content = new StringContent("{\"action\":\"appUpdate\"}", System.Text.Encoding.UTF8, "application/json")
+            };
+            using var res = await http.SendAsync(req);
+            if (!res.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            var r = doc.RootElement;
+            if (!r.TryGetProperty("offered", out var off) || off.ValueKind != JsonValueKind.True) return null;
+            string url = r.GetProperty("url").GetString() ?? "";
+            string sha = (r.GetProperty("sha256").GetString() ?? "").ToLowerInvariant();
+            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || sha.Length != 64) return null;
+            return new Release(r.GetProperty("versionCode").GetInt64(), r.TryGetProperty("versionName", out var n) ? n.GetString() ?? "" : "",
+                               url, sha, r.TryGetProperty("size", out var z) ? z.GetInt64() : 0, r.TryGetProperty("notes", out var t) ? t.GetString() ?? "" : "");
+        }
+        catch { return null; }
+    }
+
+    static async Task<Release?> FromManifestAsync()
     {
         try
         {
@@ -45,7 +81,6 @@ static class Updater
             long size = r.TryGetProperty("size", out var s) ? s.GetInt64() : 0;
             // only ever the guild's own site, and only a real checksum
             if (!url.StartsWith(LicenseConfig.SiteUrl + "/", StringComparison.OrdinalIgnoreCase) || sha.Length != 64) return null;
-            if (code <= InstalledCode(c)) return null;
             return new Release(code, r.TryGetProperty("versionName", out var n) ? n.GetString() ?? "" : "",
                                url, sha, size, r.TryGetProperty("notes", out var t) ? t.GetString() ?? "" : "");
         }
