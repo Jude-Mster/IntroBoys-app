@@ -150,7 +150,16 @@ static class RunEngine
             // the list is in the middle of the screen
             // 1.3.8: read at twice the size on smaller screens (the list's letters are small there)
             var lines = await Screen.TextAsync(0.30, 0.08, 0.40, 0.86, Math.Min(svc.ScreenSize().w, svc.ScreenSize().h) < 1000 ? 2 : 1);
-            var hit = lines.FirstOrDefault(l => names.Any(n => l.Text.Contains(n, StringComparison.OrdinalIgnoreCase)));
+            // 1.4.5: a chat line passing by ("... (Labyrinth Key] ...") is not the list's entry: the entry is "[The Labyrinth (Adept)]"
+            // (or the Den's name) - no "Key", no chat name, not a long sentence
+            bool Entry(TextLine l)
+            {
+                var t = l.Text;
+                if (t.Contains("Key", StringComparison.OrdinalIgnoreCase) || t.Contains("PVP", StringComparison.OrdinalIgnoreCase) || t.Length > 34) return false;
+                return den ? names.Any(n => t.Contains(n, StringComparison.OrdinalIgnoreCase))
+                           : System.Text.RegularExpressions.Regex.IsMatch(t, @"(The\s*Laby|Labyrinth\s*\(|rinth\s*\(Ad)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+            var hit = lines.FirstOrDefault(Entry);
             if (hit.Text != null && hit.Text.Length > 0)
             {
                 AppLog.Add("teleport: " + hit.Text.Trim());

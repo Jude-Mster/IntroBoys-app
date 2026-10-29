@@ -18,7 +18,9 @@ sealed class Stick
     GestureDescription.StrokeDescription? held;
     CancellationTokenSource? pumping;
     Task? pump;
-    const long Piece = 220;          // ms per continued piece of the touch
+    // ms per continued piece of the touch. 1.4.5: 600 on a slow phone (the cloud phone): short pieces reached the game late there,
+    // the held touch broke between them and the character ran in stops and starts
+    public long Piece = 220;
     bool wiggle;
 
     public Stick(TapService svc, BubbleLayout layout)
@@ -139,10 +141,16 @@ sealed class Nav
         this.svc = svc;
         this.layout = layout;
         stick = new Stick(svc, layout);
+        var (sw0, sh0) = svc.ScreenSize();
+        Slow = Math.Min(sw0, sh0) <= 800 || Prefs.GetInt($"nav_step_ms_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", 320) > 320;
+        if (Slow) stick.Piece = 600;
         hand = Prefs.GetInt("nav_hand", 0) is int hd && hd != 0 ? hd : 1;
     }
 
     public Position Last => last;
+
+    /// <summary>1.4.5: a slow phone (a small screen, or one that needs longer pushes): fewer screen reads while running, longer touch pieces.</summary>
+    public bool Slow { get; private set; }
 
     // 1.4.0: where a detour last got round a wall, and which way (kept while the app runs)
     static Position goodAt;
@@ -461,6 +469,9 @@ sealed class Nav
                 double s = Norm(hand * (want - off));
                 // read the position while the stick is being pushed
                 stick.Hold(s);
+                // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
+                // touch on the stick, so the run kept stopping)
+                if (Slow) await Task.Delay(350, ct);
                 long seenAt = Screen.LastFrameAt;
                 var np = await Screen.PositionAsync();
                 if (Screen.LastFrameAt == seenAt) { await Task.Delay(60, ct); continue; }      // the same picture: no news
@@ -612,8 +623,18 @@ sealed class Nav
         var (cx, cy) = layout.At(cam, w, h);
         var (aw, ah) = layout.SizeAt(cam, w, h);
         float big = Math.Min(aw, ah) * 0.9f, small = Math.Min(aw, ah) * 0.12f;
+        bool tiny = Math.Min(w, h) <= 800;
+        // 1.4.5: on a small screen the camera area is small too, so the pinches were short: wider and more of them there
+        if (tiny) { big = Math.Max(big, Math.Min(w, h) * 0.55f); small = Math.Min(small, Math.Min(w, h) * 0.06f); }
         // a few smooth pinches, like two fingers would
-        for (int i = 0; i < 3; i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, 620); await Task.Delay(220, ct); }
+        for (int i = 0; i < (tiny ? 5 : 3); i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, tiny ? 800 : 620); await Task.Delay(tiny ? 320 : 220, ct); }
         AppLog.Add("camera: zoomed all the way out");
+        if (tiny)
+        {
+            // 1.4.5: and the view is tilted up (a slow drag down), so it looks along the corridor instead of at the ground
+            float y1 = Math.Max(10, cy - h * 0.25f), y2 = Math.Min(h - 10, cy + h * 0.25f);
+            for (int i = 0; i < 2; i++) { await svc.SwipeAsync(cx, y1, cx, y2, 900); await Task.Delay(320, ct); }
+            AppLog.Add("camera: tilted up");
+        }
     }
 }
