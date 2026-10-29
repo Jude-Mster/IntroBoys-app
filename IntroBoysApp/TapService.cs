@@ -24,7 +24,7 @@ public class TapService : AccessibilityService
     /// <summary>The running service, or null while the member has not switched it on.</summary>
     public static TapService? Instance { get; private set; }
     /// <summary>Raised on the main thread when the service is switched on or off.</summary>
-    public static event Action? StateChanged;
+    public static event System.Action? StateChanged;
 
     public Handler Main { get; } = new(Looper.MainLooper!);
     internal IWindowManager Wm { get; private set; } = null!;
