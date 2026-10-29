@@ -41,10 +41,19 @@ public class TapService : AccessibilityService
         // Nothing shows by itself: not when the phone starts, not when the app opens. The floating S appears only when the
         // member taps "Show the floating S" in the app.
         ControlWanted = false;
+        License.Changed += OnLicense;
         screen = new ScreenWatch(this);
         var f = new IntentFilter(Intent.ActionScreenOff);
         f.AddAction(Intent.ActionUserPresent);
         RegisterReceiver(screen, f);
+    }
+
+    /// <summary>The license ended (ran out, switched off, signed out): the floating S goes away.</summary>
+    void OnLicense()
+    {
+        if (ControlWanted && License.State is LicenseState.SignedOut or LicenseState.NotMember or LicenseState.NoLicense
+                or LicenseState.Expired or LicenseState.Revoked or LicenseState.PhoneOff or LicenseState.OtherDevice)
+            Main.Post(() => SetControlVisible(false));
     }
 
     /// <summary>True while the member wants the floating S (this session only: never remembered across a restart).</summary>
@@ -87,6 +96,7 @@ public class TapService : AccessibilityService
         if (Instance != this) return;
         Runner.Stop("The tap permission was switched off.");
         if (screen != null) { try { UnregisterReceiver(screen); } catch { /* not registered */ } screen = null; }
+        License.Changed -= OnLicense;
         ControlWanted = false;
         try { Overlay?.CloseAll(); } catch { /* already gone */ }
         Overlay = null;
@@ -153,6 +163,7 @@ public class TapService : AccessibilityService
     /// <summary>Show or hide the floating S. Needs the tap permission; never remembered across a restart.</summary>
     public static void SetControlVisible(bool show)
     {
+        if (show && !License.Allowed()) show = false;     // only with an active license
         var s = Instance;
         ControlWanted = show && s != null;
         if (s == null) return;

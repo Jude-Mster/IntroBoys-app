@@ -217,6 +217,8 @@ public class AssistantActivity : Activity
             : string.Join("\n", layout.Bubbles.Select(b => "•  " + b.Label + "  " + Bubble.Name(b.Kind) + " · " + b.Describe()));
         bool shown = TapService.ControlWanted;
         showControl!.Text = shown ? "Hide the floating S" : "Show the floating S";
+        bool canShow = shown || (ok && tapsOn);       // only with an active license (and the tap permission)
+        showControl.Alpha = canShow ? 1f : 0.45f;
         runMsg!.Text = Runner.Running ? "Auto attack is running · " + Runner.Presses + " presses" :
                        !tapsOn ? "The floating S shows up once IntroBoys Assistant taps is switched on (set-up step " + stepTaps.Number + ")." :
                        Runner.LastStop;
@@ -291,6 +293,11 @@ public class AssistantActivity : Activity
     void ToggleControl()
     {
         bool show = !TapService.ControlWanted;
+        if (show && !License.Allowed())
+        {
+            Toast.MakeText(this, "The floating S needs an active Assistant license: sign in, and buy days if you have none.", ToastLength.Long)!.Show();
+            return;
+        }
         if (show && TapService.Instance == null)
         {
             Toast.MakeText(this, "Switch on IntroBoys Assistant taps first (set-up step " + stepTaps!.Number + ").", ToastLength.Long)!.Show();

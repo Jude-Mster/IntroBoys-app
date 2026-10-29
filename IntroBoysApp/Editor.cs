@@ -211,7 +211,7 @@ sealed class Editor
         foreach (var x in views) x.Selected = x == v;
         if (v == null) { selBox.Visibility = ViewStates.Gone; return; }
         selBox.Visibility = ViewStates.Visible;
-        body.Visibility = ViewStates.Visible;
+        // a folded panel stays folded while bubbles are moved; unfold it (+) to change the selected bubble
         ShowSelected();
     }
 

@@ -1,1 +1,1 @@
-Bubble screen: close and save buttons always on top, remove one or all bubbles. The floating S never shows by itself and goes away when the screen turns off.
+The bubble panel stays folded while you move bubbles. The floating S needs an active license.
