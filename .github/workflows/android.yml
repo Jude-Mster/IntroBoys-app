@@ -76,7 +76,15 @@ jobs:
                    -p:AndroidSigningKeyAlias="${ANDROID_KEY_ALIAS:-introboys}"
                    -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEY_PASSWORD)
           fi
-          dotnet publish IntroBoysApp/IntroBoysApp.csproj "${args[@]}"
+          set +e
+          dotnet publish IntroBoysApp/IntroBoysApp.csproj "${args[@]}" 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" != "0" ]; then
+            # errors that aren't C# ones (Java, R8, resources) don't show on the run page by themselves
+            grep -iE "error|exception" build.log | grep -viE "warning|0 Error" | sed -E 's/^[[:space:]]+//' | awk '!seen[$0]++' | head -n 9 | while IFS= read -r l; do echo "::error::${l:0:900}"; done
+            exit "$status"
+          fi
 
       - name: Name the APK and show its signature
         run: |
