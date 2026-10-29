@@ -1,0 +1,10 @@
+bin/
+obj/
+out/
+dist/
+.vs/
+*.user
+*.jks
+*.keystore
+*.txt.key
+introboys-release.txt
