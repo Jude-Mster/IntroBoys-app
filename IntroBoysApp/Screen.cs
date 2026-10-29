@@ -40,6 +40,8 @@ static class Screen
         _ => "–",
     };
     static string LastTitle = "";
+    /// <summary>When the picture of the last reading was taken (a reading from the same picture again is no news).</summary>
+    public static long LastFrameAt { get; private set; }
 
     /// <summary>
     /// 1.3.7: which place a reading is. The mini-map title of THIS picture decides (a title that is no dungeon = town); without a title, the
