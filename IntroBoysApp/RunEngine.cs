@@ -123,19 +123,23 @@ static class RunEngine
         return false;
     }
 
-    /// <summary>After the teleport: zoom all the way out, the member's camera fix, then face the way to the first boss.</summary>
+    /// <summary>
+    /// After the teleport, the way the member does it by hand: zoom all the way out, the member's own camera fix (if set), turn the view
+    /// until it looks at the dungeon's gate (toward the first boss), wait for the gate to open, and go through it straight.
+    /// It does not wander: measuring the direction is a short step and the same step back.
+    /// </summary>
     static async Task ArriveAsync(TapService svc, BubbleLayout layout, Nav nav, bool den, CancellationToken ct)
     {
-        Runner.SetPhase("setting the camera");
-        await Task.Delay(1000, ct);
+        Runner.SetPhase("finding the gate");
+        await Task.Delay(1200, ct);
         await nav.ZoomOutAsync(ct);
         if (layout.CamFix.Count > 0) await svc.CameraFixAsync(layout, ct);
-        if (await nav.CalibrateAsync(ct))
-        {
-            var p = nav.Last;
-            var (tx, ty) = den ? DenSpot : LabySpots[0];
-            if (p.Ok) await nav.FaceAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
-        }
+        var p = await nav.ReadAsync(ct);
+        if (!p.Ok) return;
+        var (tx, ty) = den ? DenSpot : LabySpots[0];
+        await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
+        Runner.SetPhase("through the gate");
+        await nav.GateAsync(tx, ty, 300, ct);
     }
 
     // ------------------------------------------------------------------ one boss

@@ -1,1 +1,1 @@
-Labyrinth and Den runs: teleport, zoom out and face the way, walk to each boss by the position on the mini-map, fight until the boss HP bar is gone, auto loot, return. New: Boss HP bar box, live position on the panel, Share the log.
+After the teleport: zooms out, turns the view to the gate without walking around, waits for the gate to open and goes straight through.

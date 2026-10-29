@@ -110,32 +110,121 @@ sealed class Nav
     }
 
     /// <summary>
-    /// Learns which way the stick moves the character: a short push up, then right, reading the position before and after each.
+    /// Learns which way the stick moves the character WITHOUT wandering off: a short step up and the same step back (and, the first
+    /// time on this phone, a step right and back, to know which way round the stick turns). The character ends where it started.
     /// </summary>
     public async Task<bool> CalibrateAsync(CancellationToken ct)
     {
-        foreach (var (first, second) in new[] { (90.0, 0.0), (270.0, 180.0), (0.0, 90.0) })
+        var fwd = await StepAsync(90, ct);
+        if (fwd == null) { var back = await StepAsync(270, ct); if (back != null) fwd = Norm(back.Value + 180); }
+        if (fwd == null) { AppLog.Add("walk: couldn't measure the stick (blocked, or the position can't be read)"); return false; }
+        if (Prefs.GetInt("nav_hand", 0) == 0)
         {
-            var p0 = await ReadAsync(ct);
-            await stick.PushAsync(first, 650);
-            var p1 = await ReadAsync(ct);
-            await stick.PushAsync(second, 650);
-            var p2 = await ReadAsync(ct);
-            await stick.ReleaseAsync();
-            if (!p0.Ok || !p1.Ok || !p2.Ok) { AppLog.Add("walk: can't read the position (is the mini-map open?)"); return false; }
-            double d1 = p1.Dist(p0.X, p0.Y), d2 = p2.Dist(p1.X, p1.Y);
-            if (d1 < 25 || d2 < 25) { AppLog.Add($"walk: blocked while measuring ({(int)d1}/{(int)d2}), trying another way"); continue; }
-            double m1 = MapAngle(p1.X - p0.X, p1.Y - p0.Y), m2 = MapAngle(p2.X - p1.X, p2.Y - p1.Y);
-            // turning the stick by (second - first) turned the walk by (m2 - m1): the same way round (+1) or mirrored (-1)
-            double turn = Norm(m2 - m1), want = Norm(second - first);
-            hand = Math.Sign(turn) == Math.Sign(want) ? 1 : -1;
-            off = Norm(m1 - hand * first);
-            known = true;
-            Prefs.Edit()!.PutInt("nav_hand", hand)!.Apply();
-            AppLog.Add($"walk: stick up goes {(int)Norm(off + hand * 90)}° on the map ({(hand > 0 ? "same" : "mirrored")})");
-            return true;
+            var right = await StepAsync(0, ct);
+            if (right != null)
+            {
+                // map angle = off + hand * stick angle: up (90) and right (0) are 90 apart one way or the other
+                hand = Math.Sign(Norm(fwd.Value - right.Value)) >= 0 ? 1 : -1;
+                Prefs.Edit()!.PutInt("nav_hand", hand)!.Apply();
+            }
         }
-        return false;
+        off = Norm(fwd.Value - hand * 90);
+        known = true;
+        AppLog.Add($"walk: the camera looks {(int)Forward}° on the map");
+        return true;
+    }
+
+    /// <summary>A short push of the stick and the same push back: the map direction the push moved the character (null: it didn't move).</summary>
+    async Task<double?> StepAsync(double angle, CancellationToken ct)
+    {
+        var p0 = await ReadAsync(ct);
+        await stick.PushAsync(angle, 320);
+        await stick.ReleaseAsync();
+        await Task.Delay(120, ct);
+        var p1 = await ReadAsync(ct);
+        await stick.PushAsync(angle + 180, 320);
+        await stick.ReleaseAsync();
+        if (!p0.Ok || !p1.Ok || p1.Dist(p0.X, p0.Y) < 15) return null;
+        return MapAngle(p1.X - p0.X, p1.Y - p0.Y);
+    }
+
+    /// <summary>
+    /// After the teleport: turns the camera (it never walks for this) until it looks toward the map direction <paramref name="toward"/>,
+    /// the way the member finds the door by turning the view. How far a camera drag turns is measured once and remembered.
+    /// </summary>
+    public async Task AlignAsync(double toward, CancellationToken ct)
+    {
+        var cam = layout.Find(BubbleKind.Camera);
+        if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
+        var (w, h) = svc.ScreenSize();
+        var (cx, cy) = layout.At(cam, w, h);
+        var (aw, _) = layout.SizeAt(cam, w, h);
+        if (!known && !await CalibrateAsync(ct)) return;
+        double perPx = Prefs.GetFloat("cam_deg_per_px", 0);
+        for (int i = 0; i < 6; i++)
+        {
+            double err = Norm(toward - Forward);
+            if (Math.Abs(err) <= 8) { AppLog.Add($"camera: facing the way ({(int)Forward}°)"); return; }
+            if (Math.Abs(perPx) < 0.01)
+            {
+                // learn it: a fixed drag, then measure again
+                float d = Math.Min(aw * 0.5f, 360);
+                double before = Forward;
+                await svc.SwipeAsync(cx - d / 2, cy, cx + d / 2, cy, 450);
+                await Task.Delay(300, ct);
+                if (!await CalibrateAsync(ct)) return;
+                double turned = Norm(Forward - before);
+                if (Math.Abs(turned) < 3) { AppLog.Add("camera: the drag didn't turn the view (put the camera area on open ground)"); return; }
+                perPx = turned / d;
+                Prefs.Edit()!.PutFloat("cam_deg_per_px", (float)perPx)!.Apply();
+                AppLog.Add($"camera: a 100 px drag turns {perPx * 100:0}°");
+                continue;
+            }
+            float px = (float)Math.Clamp(err / perPx, -aw * 0.95, aw * 0.95);
+            AppLog.Add($"camera: turning {(int)err}°");
+            await svc.SwipeAsync(cx - px / 2, cy, cx + px / 2, cy, 500);
+            await Task.Delay(300, ct);
+            if (!await CalibrateAsync(ct)) return;
+        }
+    }
+
+    /// <summary>
+    /// Through the dungeon's gate: pushes straight toward (x, y) and, while the gate is still shut (no progress), keeps facing it and
+    /// waits instead of walking round. Done once the character is <paramref name="past"/> map units on its way.
+    /// </summary>
+    public async Task<bool> GateAsync(int x, int y, double past, CancellationToken ct, double maxSecs = 70)
+    {
+        var p0 = await ReadAsync(ct);
+        if (!p0.Ok) return false;
+        double d0 = p0.Dist(x, y);
+        var start = DateTime.UtcNow;
+        var lastMove = DateTime.UtcNow;
+        bool waiting = false;
+        try
+        {
+            while ((DateTime.UtcNow - start).TotalSeconds < maxSecs)
+            {
+                ct.ThrowIfCancellationRequested();
+                var p = last;
+                double want = MapAngle(x - p.X, y - p.Y);
+                var reading = Screen.PositionAsync();
+                await stick.PushAsync(Norm(hand * (want - off)), Seg);
+                var np = await reading;
+                if (!np.Ok) continue;
+                if (np.Dist(p.X, p.Y) > 25) { lastMove = DateTime.UtcNow; if (waiting) { AppLog.Add("gate: open, going through"); waiting = false; } }
+                last = np;
+                if (d0 - np.Dist(x, y) >= past) { AppLog.Add($"gate: through ({np})"); return true; }
+                if ((DateTime.UtcNow - lastMove).TotalSeconds > 1.5 && !waiting)
+                {
+                    waiting = true;
+                    AppLog.Add("gate: shut, waiting for it to open");
+                }
+                if (waiting) { await stick.ReleaseAsync(); await Task.Delay(1000, ct); }
+            }
+            AppLog.Add("gate: didn't get through in time");
+            return false;
+        }
+        finally { await stick.ReleaseAsync(); }
     }
 
     /// <summary>The map direction the character runs when the stick is pushed up (the way the camera looks).</summary>
@@ -155,7 +244,7 @@ sealed class Nav
         if (p.Dist(x, y) <= tol) return true;
         AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
         var history = new List<(DateTime t, double d)>();
-        int detours = 0, misses = 0;
+        int detours = 0, misses = 0, flips = 0;
         double detour = 0;
         DateTime detourUntil = DateTime.MinValue;
         Position prev = p;
@@ -187,6 +276,20 @@ sealed class Nav
                 if (moved > 60 && !double.IsNaN(prevStick) && Math.Abs(Norm(prevStick - s)) < 12)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
+                    // turned well away from "up" and the character went the mirrored way: the stick turns the other way round
+                    if (Math.Abs(Norm(s - 90)) > 30)
+                    {
+                        double now = Norm(off + hand * s);
+                        double flippedOff = Norm(Forward - (-hand) * 90);
+                        double mirrored = Norm(flippedOff + (-hand) * s);
+                        if (Math.Abs(Norm(seen - now)) > 90 && Math.Abs(Norm(seen - mirrored)) < 45) flips++; else flips = 0;
+                        if (flips >= 2)
+                        {
+                            off = flippedOff; hand = -hand; flips = 0;
+                            Prefs.Edit()!.PutInt("nav_hand", hand)!.Apply();
+                            AppLog.Add("walk: the stick turns the other way round, corrected");
+                        }
+                    }
                     double newOff = Norm(seen - hand * s);
                     off = Norm(off + Norm(newOff - off) * 0.5);
                 }
@@ -229,43 +332,5 @@ sealed class Nav
         float big = Math.Min(aw, ah) * 0.9f, small = Math.Min(aw, ah) * 0.12f;
         for (int i = 0; i < 4; i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, 380); await Task.Delay(150, ct); }
         AppLog.Add("camera: zoomed all the way out");
-    }
-
-    /// <summary>
-    /// Turns the camera so the character runs straight ahead toward the map direction <paramref name="toward"/> (like facing the door
-    /// after the teleport). How far a camera drag turns is measured the first time and remembered.
-    /// </summary>
-    public async Task FaceAsync(double toward, CancellationToken ct)
-    {
-        var cam = layout.Find(BubbleKind.Camera);
-        if (cam == null || !known) return;
-        var (w, h) = svc.ScreenSize();
-        var (cx, cy) = layout.At(cam, w, h);
-        var (aw, _) = layout.SizeAt(cam, w, h);
-        double perPx = Prefs.GetFloat("cam_deg_per_px", 0);
-        if (Math.Abs(perPx) < 0.01)
-        {
-            // learn it: drag a fixed distance, measure how far the walking direction turned
-            float d = Math.Min(aw * 0.4f, 300);
-            double before = off;
-            await svc.SwipeAsync(cx - d / 2, cy, cx + d / 2, cy, 450);
-            await Task.Delay(250, ct);
-            if (!await CalibrateAsync(ct)) return;
-            double turned = Norm(off - before);
-            if (Math.Abs(turned) < 3) { AppLog.Add("camera: the drag didn't turn the view (is the camera area on open ground?)"); return; }
-            perPx = turned / d;
-            Prefs.Edit()!.PutFloat("cam_deg_per_px", (float)perPx)!.Apply();
-            AppLog.Add($"camera: a drag of 1 px turns {perPx:0.00}°");
-        }
-        for (int i = 0; i < 2; i++)
-        {
-            double err = Norm(toward - Forward);
-            if (Math.Abs(err) < 12) break;
-            float px = (float)Math.Clamp(err / perPx, -aw * 0.95, aw * 0.95);
-            await svc.SwipeAsync(cx - px / 2, cy, cx + px / 2, cy, 500);
-            await Task.Delay(250, ct);
-            off = Norm(off + px * perPx);           // what the turn should have done; the walk corrects the rest
-            AppLog.Add($"camera: turned {(int)err}° to face the way");
-        }
     }
 }
