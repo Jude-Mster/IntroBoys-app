@@ -89,9 +89,9 @@ jobs:
           # shown on the run's page: what was built, and the signing certificate's fingerprint (public; the site's
           # /.well-known/assetlinks.json needs it so the guild hall opens full screen)
           badge="$("${tools}aapt2" dump badging "dist/$name")"
-          echo "::notice title=APK::$name · $(du -h "dist/$name" | cut -f1) · $(echo "$badge" | grep -oP "^package: name='[^']+' versionCode='[^']+' versionName='[^']+'") · $(echo "$badge" | grep -oP "^sdkVersion:'[0-9]+'")"
+          echo "::notice title=APK::$name · $(du -h "dist/$name" | cut -f1) · $(echo "$badge" | grep -oP "^package: name='[^']+' versionCode='[^']+' versionName='[^']+'") · $(echo "$badge" | grep -oP "^(min)?[sS]dkVersion:'[0-9]+'" | head -n1 || true)"
           echo "::notice title=Launchers::$(echo "$badge" | grep -oP "launchable-activity: name='[^']+'  label='[^']*'" | tr '\n' ' ')"
-          sha="$("${tools}apksigner" verify --print-certs "dist/$name" | grep -oP '(?<=Signer #1 certificate SHA-256 digest: )[0-9a-f]+')"
+          sha="$("${tools}apksigner" verify --print-certs "dist/$name" 2>&1 | grep -i "SHA-256" | head -n1 | grep -oE '[0-9a-fA-F]{64}' || true)"
           echo "::notice title=Signing certificate SHA-256::$sha"
           rm -f "$RUNNER_TEMP/release.jks"
 
