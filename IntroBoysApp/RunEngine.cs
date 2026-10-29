@@ -261,7 +261,8 @@ static class RunEngine
             await LootAsync(svc, layout, ct);
             if (!den) break;                    // the LOD boss may come back: watch a few seconds more
         }
-        return !await OutsideAsync(nav, den, ct);
+        // 1.4.0: straight on to the next boss after the kill (the walk itself notices a map change; this was up to 4 s more)
+        return fights > 0 || !await OutsideAsync(nav, den, ct);
     }
 
     /// <summary>
@@ -315,7 +316,8 @@ static class RunEngine
         // 1.3.8: what was seen of the bar is kept for the whole fight (it was forgotten after every check, so on a phone where the red is
         // hard to read the fight stopped every 5 s to look again - and one missed name made the run leave a living boss)
         double lo = 1, hi = 0;
-        int confirmMisses = 0;
+        int confirmMisses = 0, redReads = 0;
+        var lastRed = DateTime.UtcNow;
         while (true)
         {
             Runner.ShowPhase("fighting " + name);
@@ -329,7 +331,7 @@ static class RunEngine
                     var (hp, there) = await Screen.BossAsync(layout, hi > 0);
                     if (hp <= 0 && hi <= 0) there = false;            // never saw its red bar: text near the box isn't a boss
                     lastThere = there;
-                    if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); } }
+                    if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; } }
                     else goneSince ??= DateTime.UtcNow;
                     double secs = (DateTime.UtcNow - start).TotalSeconds;
                     double need = lo <= 0.15 && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
@@ -350,19 +352,30 @@ static class RunEngine
                 continue;
             }
             if ((DateTime.UtcNow - start).TotalSeconds >= FightTimeout) break;
-            // make sure: target once more and look three times (about 2 s); a boss that is still there shows its bar or its name again.
-            // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss
+            // make sure: target once more and look again; a boss that is still there shows its bar or its name again.
+            // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss.
+            // 1.4.0: after a boss that was nearly dead the check is one quick look (it is over: on to the next boss at once), else three
+            bool nearlyDead = lo <= 0.15 && hi >= 0.30;
             await Press(svc, layout, BubbleKind.Target);
-            await Task.Delay(900, ct);
-            bool alive = false; double hp2 = -1;
-            for (int k = 0; k < 3 && !alive; k++)
+            await Task.Delay(nearlyDead ? 500 : 900, ct);
+            bool alive = false, red = false; double hp2 = -1;
+            for (int k = 0; k < (nearlyDead ? 2 : 3) && !alive; k++)
             {
-                if (k > 0) await Task.Delay(500, ct);
+                if (k > 0) await Task.Delay(400, ct);
                 var (h2, t2) = await Screen.BossAsync(layout, true);
-                if (h2 > 0 || t2) { alive = true; hp2 = h2; }
+                if (h2 > 0 || t2) { alive = true; hp2 = h2; red = h2 > 0; }
+            }
+            // 1.4.0: only a name, no red, for a long time on a phone that reads the red well: the target key has picked something else
+            // (yourself, a player) and the boss is gone - it stayed 2 minutes on a dead boss until the fight's time ran out
+            double noRed = (DateTime.UtcNow - lastRed).TotalSeconds;
+            if (alive && !red && redReads >= 8 && noRed > (lo <= 0.15 ? 25 : 15))
+            {
+                AppLog.Add($"{name}: only a name and no red bar for {noRed:0} s - counting it dead");
+                alive = false;
             }
             if (alive)
             {
+                if (red) lastRed = DateTime.UtcNow;
                 if (++confirmMisses <= 3 || confirmMisses % 10 == 0)
                     AppLog.Add($"{name}: still there ({(hp2 > 0 ? Math.Round(hp2 * 100) + "%" : "no red")}), attacking on");
                 continue;
@@ -435,8 +448,7 @@ static class RunEngine
     static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct)
     {
         Runner.SetPhase("looting");
-        await Runner.LootBurstAsync(svc, layout, ct);
-        await Task.Delay(300, ct);
+        await Runner.LootBurstAsync(svc, layout, ct);       // 1.4.0: 6 taps (was 8) and no pause after: then straight to the next boss
     }
 
     /// <summary>The return scroll after the last boss (and a moment for the town to load).</summary>

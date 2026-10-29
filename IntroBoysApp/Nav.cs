@@ -144,6 +144,10 @@ sealed class Nav
 
     public Position Last => last;
 
+    // 1.4.0: where a detour last got round a wall, and which way (kept while the app runs)
+    static Position goodAt;
+    static double goodDetour;
+
     static double Norm(double a) { a %= 360; if (a > 180) a -= 360; if (a < -180) a += 360; return a; }
     static double MapAngle(int dx, int dy) => Math.Atan2(dy, dx) * 180 / Math.PI;
 
@@ -157,7 +161,7 @@ sealed class Nav
             if (p.Ok && (!last.Ok || p.Dist(last.X, last.Y) < 3000 || i == tries - 1)) { last = p; return p; }
             await Task.Delay(150, ct);
         }
-        return default;
+        return new Position(false, 0, 0, Screen.LastMap, "");
     }
 
     /// <summary>
@@ -324,7 +328,9 @@ sealed class Nav
         AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
         var history = new List<(DateTime t, double d)>();
         int detours = 0, misses = 0, flips = 0, jumps = 0;
-        bool rechecked = false;
+        bool rechecked = false, canMove = false;
+        Position detourFrom = default;
+        double detourDist = 0;
         var startPlace = Screen.PlaceOf(p);
         Position firstStuck = default;
         double detour = 0;
@@ -353,7 +359,7 @@ sealed class Nav
                 {
                     // 1.3.7: a far jump that the map title agrees with is no misread: the character is somewhere else now (died, kicked)
                     var pl = Screen.PlaceOf(np);
-                    if (np.Ok && np.Title.Length > 0 && pl != Place.Unknown && pl != startPlace && ++jumps >= 2) { AppLog.Add($"walk: the map changed ({Screen.PlaceText} at {np})"); return false; }
+                    if (np.Ok && (np.Title ?? "").Length > 0 && pl != Place.Unknown && pl != startPlace && ++jumps >= 2) { AppLog.Add($"walk: the map changed ({Screen.PlaceText} at {np})"); return false; }
                     if (++misses > 12) { AppLog.Add("walk: the position can't be read"); return false; }
                     continue;
                 }
@@ -386,13 +392,30 @@ sealed class Nav
                 prev = np;
                 p = np;
 
+                // 1.4.0: a detour that has just ended and got the character clearly on its way: remember it for this place
+                if (detourFrom.Ok && DateTime.UtcNow >= detourUntil)
+                {
+                    if (detourDist - p.Dist(x, y) > 150 || p.Dist(detourFrom.X, detourFrom.Y) > 250) { goodAt = detourFrom; goodDetour = detour; }
+                    detourFrom = default;
+                }
+
                 // stuck: not getting closer for about 2 seconds -> walk round it (left, right, further each time)
                 history.Add((DateTime.UtcNow, p.Dist(x, y)));
                 history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > 2.6);
                 if (DateTime.UtcNow > detourUntil && history.Count >= 4 && (DateTime.UtcNow - history[0].t).TotalSeconds > 2.0 && history[0].d - history[^1].d < 60)
                 {
-                    if (++detours > 8) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
+                    if (++detours > 10) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
+                    // 1.4.0: a detour that got round this wall before (the same place) is tried first, straight away
+                    if (detours == 1 && goodAt.Ok && p.Dist(goodAt.X, goodAt.Y) < 900)
+                    {
+                        detour = goodDetour;
+                        detourUntil = DateTime.UtcNow.AddMilliseconds(1800);
+                        detourFrom = p; detourDist = p.Dist(x, y);
+                        AppLog.Add($"walk: stuck at {p}, going round the way that worked here before ({(int)detour}°)");
+                        history.Clear();
+                        continue;
+                    }
                     // 1.3.7: stuck twice - the camera may have been turned (by hand, by accident): measure again which way the stick goes
                     // (a step and the same step back) before walking round, so the detours go the right way
                     if (detours == 2 && !rechecked)
@@ -405,20 +428,26 @@ sealed class Nav
                             AppLog.Add($"walk: not moving at all at {p} (dead, a window open, or boxed in)");
                             return false;
                         }
+                        canMove = true;
                         history.Clear(); prevStick = double.NaN;
                         var rp = await ReadAsync(ct, 1);
                         if (rp.Ok) { p = rp; prev = rp; }
                         detourUntil = DateTime.MinValue;
                         continue;
                     }
-                    if (detours >= 3 && firstStuck.Ok && p.Dist(firstStuck.X, firstStuck.Y) < 40)
+                    // 1.4.0: only when the step test did NOT show it can move (it can: then it is a wall - go round it, wider and longer;
+                    // this gave up 8 times in a row in front of the same wall on the way to boss 5)
+                    if (!canMove && detours >= 3 && firstStuck.Ok && p.Dist(firstStuck.X, firstStuck.Y) < 40)
                     {
                         AppLog.Add($"walk: not moving at all at {p}");
                         return false;
                     }
                     // small turns first (a pillar or a corner), wider only if that didn't help
-                    detour = (detours % 2 == 1 ? 1 : -1) * Math.Min(100, 30 + 15 * ((detours - 1) / 2) * 2);
-                    detourUntil = DateTime.UtcNow.AddMilliseconds(700 + 120 * detours);
+                    // 1.4.0: left / right in turn, 35° → 60° → 90° → 120°, each longer (slides along a long wall instead of bumping it)
+                    int k = (detours - 1) / 2;
+                    detour = (detours % 2 == 1 ? 1 : -1) * new[] { 35, 60, 90, 120, 135 }[Math.Min(4, k)];
+                    detourUntil = DateTime.UtcNow.AddMilliseconds(1100 + 450 * k);
+                    detourFrom = p; detourDist = p.Dist(x, y);
                     AppLog.Add($"walk: stuck at {p}, going round ({(int)detour}°)");
                     history.Clear();
                 }

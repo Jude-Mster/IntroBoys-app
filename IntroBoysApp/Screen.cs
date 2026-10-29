@@ -12,8 +12,9 @@ public enum Place { Unknown, Town, Labyrinth, Den }
 /// </summary>
 public readonly record struct Position(bool Ok, int X, int Y, string Map, string Title = "")
 {
-    public bool InLabyrinth => Map.Contains("Labyrinth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Labyr", StringComparison.OrdinalIgnoreCase);
-    public bool InDen => Map.Contains("Rebirth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Den", StringComparison.Ordinal);
+    // 1.4.0: an empty reading (default) has null strings: "Object reference not set" after a kill, when the screen couldn't be read
+    public bool InLabyrinth => (Map ?? "").Contains("Labyr", StringComparison.OrdinalIgnoreCase);
+    public bool InDen => (Map ?? "").Contains("Rebirth", StringComparison.OrdinalIgnoreCase) || (Map ?? "").Contains("Den", StringComparison.Ordinal);
     public double Dist(int x, int y) => Math.Sqrt((double)(X - x) * (X - x) + (double)(Y - y) * (Y - y));
     public override string ToString() => Ok ? $"{X} , {Y}" : "–";
 }
@@ -55,7 +56,7 @@ static class Screen
                    : p.X >= 2600 && p.X <= 4700 && p.Y >= 800 && p.Y <= 36000 ? Place.Labyrinth
                    : p.X >= 700 && p.X <= 1700 && p.Y >= 1000 && p.Y <= 3000 ? Place.Den
                    : Place.Town;
-        string t = p.Title;
+        string t = p.Title ?? "";
         if (t.Length == 0) return byXy;
         bool Has(string w) => t.Contains(w, StringComparison.OrdinalIgnoreCase);
         // a word or two is enough (the text reader drops letters: "[The Labyrinth (Ade", "[The Labyrinth (AdeX")
@@ -70,27 +71,106 @@ static class Screen
     public static async Task<Position> PositionAsync()
     {
         var f = await Capture.SnapAsync(C);
-        if (f == null) return default;
+        if (f == null) return new Position(false, 0, 0, LastMap, "");
         LastFrameAt = f.At;
-        // the mini-map title and the numbers under it: the top right corner
-        int x = (int)(f.W * 0.80), y = (int)(f.H * 0.035), w = f.W - x, h = (int)(f.H * 0.10);
-        var lines = await Ocr.ReadAsync(f, x, y, w, h, 2);
-        string map = "";
-        Position pos = default;
-        foreach (var l in lines.OrderBy(l => l.Y))
+        // 1.4.0: where the mini-map numbers are on THIS phone. The game draws its corner pieces by the screen's HEIGHT, so the part that
+        // is read is as wide as 46 % of the height (was 20 % of the width: on a wider or narrower screen the numbers fell outside it).
+        // A place found once is remembered (Prefs "pos_box"); when nothing is found there, the whole top-right quarter is searched.
+        var (x, y, w, h) = PosBox(f);
+        var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, 2));
+        if (!pos.Ok)
         {
-            var m = Coord.Match(l.Text);
-            if (m.Success && !pos.Ok && int.TryParse(m.Groups[1].Value, out int px) && int.TryParse(m.Groups[2].Value, out int py))
-                pos = new Position(true, px, py, "");
-            // the map name is the title in brackets ("[The Labyrinth (Adept)]"); the ping / FPS line above it is not a map
-            else if (l.Text.Contains('[') && l.Text.Count(char.IsLetter) >= 4) map = l.Text.Trim();
+            if (++posMisses >= 3 && System.Environment.TickCount64 - lastWide > 4000)
+            {
+                lastWide = System.Environment.TickCount64;
+                int wx = f.W / 2, ww = f.W - wx, wh = (int)(f.H * 0.32);
+                var wide = await Ocr.ReadAsync(f, wx, 0, ww, wh, 2);
+                var (p2, m2) = ReadPos(wide, true);
+                if (p2.Ok)
+                {
+                    pos = p2; if (m2.Length > 0) map = m2;
+                    Learn(f, wide.Where(l => (l.Text.Contains('[') && l.Text.Count(char.IsLetter) >= 4)
+                                          || (Clean(l.Text).Contains(p2.X.ToString()) && Clean(l.Text).Contains(p2.Y.ToString()))).ToList());
+                }
+            }
         }
+        else posMisses = 0;
         if (map.Length > 0) LastMap = map;
         pos = pos with { Map = map.Length > 0 ? map : LastMap, Title = map };
         if (pos.Ok) LastPos = pos;
         var place = PlaceOf(pos);
         if (place != Place.Unknown) { LastPlace = place; LastTitle = map.Length > 0 ? map : ""; }
         return pos;
+    }
+
+    static int posMisses;
+    static long lastWide = -100000;
+    static Android.Content.ISharedPreferences Prefs => C.GetSharedPreferences("screen", Android.Content.FileCreationMode.Private)!;
+
+    /// <summary>The part of the screen with the mini-map title and numbers: the one found before, or the default for this screen shape.</summary>
+    static (int x, int y, int w, int h) PosBox(Frame f)
+    {
+        string key = $"pos_box_{f.W}x{f.H}";
+        var saved = Prefs.GetString(key, "") ?? "";
+        var parts = saved.Split(',');
+        if (parts.Length == 4 && parts.All(q => int.TryParse(q, out _)))
+        {
+            int[] v = parts.Select(int.Parse).ToArray();
+            if (v[2] > 20 && v[3] > 10 && v[0] + v[2] <= f.W && v[1] + v[3] <= f.H) return (v[0], v[1], v[2], v[3]);
+        }
+        int w = Math.Min(f.W / 2, Math.Max((int)(f.W * 0.20), (int)(f.H * 0.46)));
+        return (f.W - w, (int)(f.H * 0.035), w, (int)(f.H * 0.10));
+    }
+
+    /// <summary>The numbers (and title) were found in the wide search: remember that place, with room around it.</summary>
+    static void Learn(Frame f, List<TextLine> lines)
+    {
+        var num = lines.Where(l => !l.Text.Contains('[')).ToList();
+        if (num.Count == 0) return;
+        var c0 = num[0];
+        var hit = num.Take(1).Concat(lines.Where(l => l.Text.Contains('[') && c0.Y - l.Y >= 0 && c0.Y - l.Y < l.H * 6)).ToList();
+        float x0 = hit.Min(l => l.X), y0 = hit.Min(l => l.Y), x1 = hit.Max(l => l.X + l.W), y1 = hit.Max(l => l.Y + l.H);
+        float padX = Math.Max(f.H * 0.08f, (x1 - x0) * 0.5f), padY = Math.Max(f.H * 0.02f, (y1 - y0) * 0.6f);
+        int bx = (int)Math.Max(0, x0 - padX), by = (int)Math.Max(0, y0 - padY);
+        int bw = (int)Math.Min(f.W - bx, x1 - x0 + 2 * padX), bh = (int)Math.Min(f.H - by, y1 - y0 + 2 * padY);
+        Prefs.Edit()!.PutString($"pos_box_{f.W}x{f.H}", $"{bx},{by},{bw},{bh}")!.Apply();
+        AppLog.Add($"screen: found the mini-map numbers at {bx},{by} ({bw} x {bh}) on this {f.W} x {f.H} screen - remembered");
+        posMisses = 0;
+    }
+
+    /// <summary>Letters the reader mistakes for digits in the numbers line ("3595 , 34l53", "O").</summary>
+    static string Clean(string t)
+    {
+        int digits = t.Count(char.IsDigit);
+        if (digits < 4 || digits < t.Count(char.IsLetter) * 2) return t;
+        return t.Replace('O', '0').Replace('o', '0').Replace('l', '1').Replace('I', '1').Replace('S', '5').Replace('B', '8');
+    }
+
+    static (Position pos, string map) ReadPos(List<TextLine> lines, bool strict = false)
+    {
+        string map = "";
+        TextLine? title = null;
+        foreach (var l in lines.OrderBy(l => l.Y))
+            if (l.Text.Contains('[') && l.Text.Count(char.IsLetter) >= 4) { map = l.Text.Trim(); title ??= l; }
+        // the numbers: the first "x , y" line (wide search: 3-5 digits each, the one right under the title when there is one -
+        // other numbers on the screen, like "53.550", are not a position)
+        var cands = new List<(TextLine l, int x, int y)>();
+        foreach (var l in lines.OrderBy(l => l.Y))
+        {
+            var m = Coord.Match(Clean(l.Text));
+            if (!m.Success || !int.TryParse(m.Groups[1].Value, out int px) || !int.TryParse(m.Groups[2].Value, out int py)) continue;
+            if (strict && (m.Groups[1].Value.Length < 3 || m.Groups[2].Value.Length < 3)) continue;
+            cands.Add((l, px, py));
+        }
+        if (cands.Count == 0) return (new Position(false, 0, 0, "", ""), map);
+        var pick = cands[0];
+        if (strict && title is TextLine t)
+        {
+            var below = cands.Where(c => c.l.Y >= t.Y && c.l.Y - t.Y < t.H * 6).OrderBy(c => Math.Abs(c.l.Cx - t.Cx) + (c.l.Y - t.Y)).ToList();
+            if (below.Count > 0) pick = below[0];
+            else return (new Position(false, 0, 0, "", ""), map);
+        }
+        return (new Position(true, pick.x, pick.y, "", ""), map);
     }
 
     /// <summary>The map name only (Ok false when nothing is readable).</summary>

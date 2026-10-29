@@ -171,7 +171,7 @@ static class Runner
     /// pressed once), otherwise why it had to stop.
     /// </summary>
     /// <summary>Loot after a kill: the Auto loot bubble, every 400 ms, about 3 seconds.</summary>
-    public static async Task LootBurstAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int taps = 8)
+    public static async Task LootBurstAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int taps = 6)
     {
         var loot = layout.Find(BubbleKind.AutoLoot);
         if (loot == null) return;

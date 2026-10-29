@@ -58,6 +58,19 @@ sealed class Overlay
         try { svc.Wm.RemoveView(v); } catch { /* not shown */ }
     }
 
+    /// <summary>
+    /// 1.4.0: is (x, y) on the floating S or its open panel? A tap meant for the game that lands there presses the Assistant's own
+    /// buttons instead (on the OPPO a buff bubble lay under the panel: auto attack pressed its own Stop the moment it started). Main thread.
+    /// </summary>
+    public bool Covers(float x, float y)
+    {
+        var v = control;
+        if (v == null || v.Width <= 0 || !v.IsShown) return false;
+        var at = new int[2];
+        v.GetLocationOnScreen(at);
+        return x >= at[0] && x < at[0] + v.Width && y >= at[1] && y < at[1] + v.Height;
+    }
+
     public void CloseAll()
     {
         CloseEditor();
@@ -252,7 +265,8 @@ sealed class Overlay
         string? why = Runner.Start();
         if (why != null && detail != null) { detail.Text = why; detail.SetTextColor(Ui.Gold); return; }
         // a run needs the whole screen: fold the panel away (the S stays; tap it to look)
-        if (Runner.RunningMode != RunMode.Attack && panelBox != null) panelBox.Visibility = ViewStates.Gone;
+        // 1.4.0: auto attack too - an open panel lay over the member's bubbles on some phones
+        if (panelBox != null) panelBox.Visibility = ViewStates.Gone;
     }
 
     void OnRunnerChanged() => svc.Main.Post(Refresh);

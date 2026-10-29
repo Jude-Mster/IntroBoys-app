@@ -130,6 +130,8 @@ public class TapService : AccessibilityService
     /// Presses the screen at (x, y) for <paramref name="ms"/> milliseconds. True when Android finished the press, false when it was
     /// cancelled (for example the member touched the screen) or refused. Throws <see cref="LicenseException"/> without a valid license.
     /// </summary>
+    long coveredSaid = -100000;
+
     public Task<bool> PressAsync(float x, float y, long ms)
     {
         License.Require();
@@ -141,6 +143,13 @@ public class TapService : AccessibilityService
         {
             try
             {
+                // 1.4.0: never press the Assistant's own floating S / panel (that pressed its Stop button)
+                if (Overlay?.Covers(x, y) == true)
+                {
+                    if (System.Environment.TickCount64 - coveredSaid > 30000) { coveredSaid = System.Environment.TickCount64; AppLog.Add("a bubble is under the floating S / its panel: not pressed (move the S, or tap it to fold the panel)"); }
+                    done.TrySetResult(true);
+                    return;
+                }
                 var path = new Android.Graphics.Path();
                 path.MoveTo(x, y);
                 var stroke = new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms));
