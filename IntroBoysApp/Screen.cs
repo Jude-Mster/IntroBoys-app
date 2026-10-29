@@ -52,10 +52,13 @@ static class Screen
     /// </summary>
     public static Place PlaceOf(Position p)
     {
+        // 1.4.4: "town" from the numbers alone only with two whole 4-5 digit numbers: a dropped first digit ("595 , 34153" read off a
+        // tiny screen) made the cloud phone think it was in town and start the run over
         Place byXy = !p.Ok ? Place.Unknown
                    : p.X >= 2600 && p.X <= 4700 && p.Y >= 800 && p.Y <= 36000 ? Place.Labyrinth
                    : p.X >= 700 && p.X <= 1700 && p.Y >= 1000 && p.Y <= 3000 ? Place.Den
-                   : Place.Town;
+                   : p.X >= 1000 && p.Y >= 1000 ? Place.Town
+                   : Place.Unknown;
         string t = p.Title ?? "";
         if (t.Length == 0) return byXy;
         bool Has(string w) => t.Contains(w, StringComparison.OrdinalIgnoreCase);
@@ -78,7 +81,10 @@ static class Screen
         // A place found once is remembered (Prefs "pos_box"); when nothing is found there, the whole top-right quarter is searched.
         var (x, y, w, h) = PosBox(f);
         // 1.4.3: a small screen (720p: the numbers are ~10 px high) is read at 3 times the size
-        var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, Math.Min(f.W, f.H) <= 800 ? 3 : 2));
+        int sc = Math.Min(f.W, f.H) <= 800 ? 3 : 2;
+        var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, sc));
+        // 1.4.4: a small screen that didn't read: once more at the other size before anything else
+        if (!pos.Ok && sc == 3) { var (pa, ma) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, 2)); if (pa.Ok) { pos = pa; if (ma.Length > 0) map = ma; } }
         if (!pos.Ok)
         {
             if (++posMisses >= 3 && System.Environment.TickCount64 - lastWide > 4000)

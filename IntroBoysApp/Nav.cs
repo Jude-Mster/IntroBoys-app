@@ -281,15 +281,40 @@ sealed class Nav
         // are kept to 90° at a time, and after 6 tries or 40 s it goes on anyway - the walk steers by the measured direction, not the view.
         var t0 = DateTime.UtcNow;
         bool careful = false;
-        for (int i = 0; i < 6 && (DateTime.UtcNow - t0).TotalSeconds < 40; i++)
+        // 1.4.4: the view after the teleport is the same every time, so the drag that turned it onto the gate last time is used
+        // again straight away (one turn and one look, instead of learning it every run - on the cloud phone each look takes ~15 s)
+        string gkey = $"gate_turn_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}";
+        double startFwd = Forward, totalPx = 0;
+        var saved = (Prefs.GetString(gkey, "") ?? "").Split(',');
+        if (saved.Length == 3 && double.TryParse(saved[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sFrom)
+            && double.TryParse(saved[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sTo)
+            && double.TryParse(saved[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sPx)
+            && Math.Abs(Norm(startFwd - sFrom)) <= 30 && Math.Abs(Norm(toward - sTo)) <= 15 && Math.Abs(Norm(toward - startFwd)) > 12)
+        {
+            AppLog.Add("camera: the turn that faced the gate last time");
+            Runner.ShowPhase("camera: turning to the gate");
+            await TurnAsync((float)sPx, ct);
+            totalPx += sPx;
+            off = Norm(off + sPx * perPx);
+            await Task.Delay(250, ct);
+            if (!await CalibrateAsync(ct)) return;
+        }
+        for (int i = 0; i < 6 && (DateTime.UtcNow - t0).TotalSeconds < 70; i++)
         {
             double err = Norm(toward - Forward);
-            if (Math.Abs(err) <= 12) { AppLog.Add($"camera: looking at the gate ({(int)Forward}°)"); return; }
+            if (Math.Abs(err) <= 12)
+            {
+                AppLog.Add($"camera: looking at the gate ({(int)Forward}°)");
+                if (Math.Abs(totalPx) > 1) Prefs.Edit()!.PutString(gkey, string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#},{1:0.#},{2:0.#}", startFwd, toward, totalPx))!.Apply();
+                return;
+            }
+            Runner.ShowPhase(careful ? "camera: learning how this phone turns (first time only)" : "camera: turning to the gate");
             double ask = careful ? Math.Clamp(err, -90, 90) : err;
             AppLog.Add($"camera: turning {(int)ask}° toward the gate");
             double before = Forward;
             float px = (float)(ask / perPx);
             await TurnAsync(px, ct);
+            totalPx += px;
             off = Norm(off + px * perPx);                       // where the turn should have put it
             await Task.Delay(250, ct);
             if (!await CalibrateAsync(ct)) return;             // and where it really is (a step and back)
@@ -300,7 +325,8 @@ sealed class Nav
             if (Math.Abs(got) >= 5)
             {
                 double seen = got / px;
-                perPx = Math.Sign(seen) != Math.Sign(perPx) ? seen : perPx * 0.4 + seen * 0.6;
+                // 1.4.4: a clear turn (15° or more) is taken as it is - blending made the cloud phone need many slow tries
+                perPx = Math.Sign(seen) != Math.Sign(perPx) || Math.Abs(got) >= 15 ? seen : perPx * 0.4 + seen * 0.6;
             }
             else perPx *= 0.6;                                  // hardly turned: bigger drags
             perPx = Math.Sign(perPx) * Math.Clamp(Math.Abs(perPx), 0.02, 3.0);
@@ -322,6 +348,10 @@ sealed class Nav
         var (cx, cy) = layout.At(cam, w, h);
         var (aw, ah) = layout.SizeAt(cam, w, h);
         float dir = Math.Sign(px), left = Math.Abs(px), most = Math.Max(120, aw * 0.8f);
+        // 1.4.4: on a small screen (the 720p cloud phone) the drags were short, and the start of every drag (the game's touch slop and its
+        // lag) is lost - many short drags turned a fifth of what was asked. Longer, slower drags there: 40 % of the screen width each.
+        bool small = Math.Min(w, h) <= 800;
+        if (small) most = Math.Max(most, w * 0.40f);
         var rnd = new Random();
         while (left > 2)
         {
@@ -329,17 +359,23 @@ sealed class Nav
             float chunk = Math.Min(left, most);
             left -= chunk;
             float x1 = cx - dir * chunk / 2, x2 = cx + dir * chunk / 2;
+            if (small)
+            {
+                // keep the whole drag on the screen (it may leave the camera area; it starts on open ground)
+                float shift = Math.Max(0, 12 - Math.Min(x1, x2)) - Math.Max(0, Math.Max(x1, x2) - (w - 12));
+                x1 += shift; x2 += shift;
+            }
             float y = cy + (float)(rnd.NextDouble() - 0.5) * ah * 0.2f;
             float bend = chunk * (0.05f + (float)rnd.NextDouble() * 0.05f);
-            long ms = (long)Math.Clamp(chunk * 1.8, 450, 1100);
+            long ms = (long)Math.Clamp(chunk * 1.8, small ? 700 : 450, small ? 1500 : 1100);
             await svc.DispatchAsync(() =>
             {
                 var path = new Android.Graphics.Path();
                 path.MoveTo(x1, y);
-                path.QuadTo(cx, y - bend, x2, y + bend * 0.3f);
+                path.QuadTo((x1 + x2) / 2, y - bend, x2, y + bend * 0.3f);
                 return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, ms))!.Build()!;
             }, ms);
-            await Task.Delay(140 + rnd.Next(120), ct);
+            await Task.Delay((small ? 260 : 140) + rnd.Next(120), ct);
         }
     }
 
