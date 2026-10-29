@@ -4,15 +4,17 @@ using Android.Content;
 namespace IntroBoys.App;
 
 /// <summary>
-/// The move pad, held like a thumb: the stick is pushed one way and kept down, then turned to a new way without letting go, so the
-/// character runs without stopping. Built on Android's continued gestures.
+/// The move pad, pressed and HELD like a thumb (the way a WASD key is held on PC): one long touch that goes to the edge of the stick
+/// and stays there, so the character runs without stopping. Only a real change of direction (or a hold running out) starts a new
+/// touch, which takes a few milliseconds.
 /// </summary>
 sealed class Stick
 {
     readonly TapService svc;
     readonly float cx, cy, reach;
-    GestureDescription.StrokeDescription? held;
-    float atX, atY;
+    double heldAngle = double.NaN;
+    long heldSince, heldUntil;
+    const long HoldMs = 6000;            // one touch lasts this long; it is renewed before it runs out
 
     public Stick(TapService svc, BubbleLayout layout)
     {
@@ -24,43 +26,53 @@ sealed class Stick
         if (reach < 20) reach = 120;
     }
 
-    /// <summary>Pushes the stick toward <paramref name="angle"/> (degrees: 0 = right, 90 = up on the screen) for <paramref name="ms"/>.</summary>
-    public async Task<bool> PushAsync(double angle, long ms)
+    static long Now => System.Environment.TickCount64;
+
+    GestureDescription Build(double angle, long ms)
     {
         double a = angle * Math.PI / 180;
         float tx = cx + (float)(reach * Math.Cos(a)), ty = cy - (float)(reach * Math.Sin(a));
-        var prev = held;
-        float fx = prev == null ? cx : atX, fy = prev == null ? cy : atY;
-        GestureDescription.StrokeDescription? stroke = null;
-        bool ok = await svc.DispatchAsync(() =>
-        {
-            var path = new Android.Graphics.Path();
-            path.MoveTo(fx, fy);
-            path.LineTo(tx, ty);
-            stroke = prev == null
-                ? new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms), true)
-                : prev.ContinueStroke(path, 0, Math.Max(1, ms), true);
-            return new GestureDescription.Builder().AddStroke(stroke!)!.Build()!;
-        }, ms);
-        if (ok) { held = stroke; atX = tx; atY = ty; }
-        else held = null;           // cancelled (e.g. the member touched the screen): the next push starts a new touch
-        return ok;
+        var path = new Android.Graphics.Path();
+        path.MoveTo(cx, cy);
+        path.LineTo(tx, ty);
+        // a stroke moves along its path for its whole time: after reaching the edge, a long run of 1-pixel wiggles keeps the thumb
+        // at the edge for nearly all of it
+        // (2-pixel wiggles, about 5000 px of them, so the way out to the edge takes only ~3% of the touch)
+        int wiggles = 2500;
+        for (int i = 0; i < wiggles; i++) path.LineTo(tx + (i % 2 == 0 ? 2 : 0), ty);
+        return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms)))!.Build()!;
     }
 
-    /// <summary>Lets go of the stick.</summary>
+    /// <summary>Keeps the stick pushed toward <paramref name="angle"/> (degrees: 0 = right, 90 = up on the screen). Returns at once.</summary>
+    public void Hold(double angle)
+    {
+        long now = Now;
+        double diff = double.IsNaN(heldAngle) ? 999 : Math.Abs(((angle - heldAngle) % 360 + 540) % 360 - 180);
+        if (diff < 10 && now < heldUntil - 800) return;       // same way and not about to run out: keep the thumb where it is
+        heldAngle = angle;
+        heldSince = now;
+        heldUntil = now + HoldMs;
+        _ = svc.DispatchAsync(() => Build(angle, HoldMs), HoldMs);
+    }
+
+    /// <summary>A push of <paramref name="ms"/> milliseconds (short steps), waited for.</summary>
+    public async Task<bool> PushAsync(double angle, long ms)
+    {
+        heldAngle = double.NaN;
+        return await svc.DispatchAsync(() => Build(angle, ms), ms);
+    }
+
+    /// <summary>Lets go of the stick (a tiny touch on its middle ends the held one).</summary>
     public async Task ReleaseAsync()
     {
-        var prev = held;
-        held = null;
-        if (prev == null) return;
-        float x = atX, y = atY;
+        if (double.IsNaN(heldAngle)) return;
+        heldAngle = double.NaN;
         await svc.DispatchAsync(() =>
         {
             var path = new Android.Graphics.Path();
-            path.MoveTo(x, y);
-            path.LineTo(cx, cy);
-            return new GestureDescription.Builder().AddStroke(prev.ContinueStroke(path, 0, 40, false)!)!.Build()!;
-        }, 40);
+            path.MoveTo(cx, cy);
+            return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, 10))!.Build()!;
+        }, 10);
     }
 }
 
@@ -80,7 +92,6 @@ sealed class Nav
     bool known;
     Position last;
 
-    const long Seg = 320;                  // ms the stick is held toward one direction before it is checked again
     static Android.Content.ISharedPreferences Prefs => TapService.Prefs;
 
     public Nav(TapService svc, BubbleLayout layout)
@@ -139,11 +150,9 @@ sealed class Nav
     {
         var p0 = await ReadAsync(ct);
         await stick.PushAsync(angle, 320);
-        await stick.ReleaseAsync();
         await Task.Delay(120, ct);
         var p1 = await ReadAsync(ct);
         await stick.PushAsync(angle + 180, 320);
-        await stick.ReleaseAsync();
         if (!p0.Ok || !p1.Ok || p1.Dist(p0.X, p0.Y) < 15) return null;
         return MapAngle(p1.X - p0.X, p1.Y - p0.Y);
     }
@@ -236,9 +245,9 @@ sealed class Nav
                 ct.ThrowIfCancellationRequested();
                 var p = last;
                 double want = MapAngle(x - p.X, y - p.Y);
-                var reading = Screen.PositionAsync();
-                await stick.PushAsync(Norm(hand * (want - off)), Seg);
-                var np = await reading;
+                stick.Hold(Norm(hand * (want - off)));
+                var np = await Screen.PositionAsync();
+                await Task.Delay(40, ct);
                 if (!np.Ok) continue;
                 if (np.Dist(p.X, p.Y) > 25) { lastMove = DateTime.UtcNow; if (waiting) { AppLog.Add("gate: open, going through"); waiting = false; } }
                 last = np;
@@ -293,10 +302,9 @@ sealed class Nav
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
                 // read the position while the stick is being pushed
-                var reading = Screen.PositionAsync();
-                bool pushed = await stick.PushAsync(s, Seg);
-                var np = await reading;
-                if (!pushed) { await Task.Delay(150, ct); }
+                stick.Hold(s);
+                var np = await Screen.PositionAsync();
+                await Task.Delay(40, ct);
                 if (!np.Ok || np.Dist(prev.X, prev.Y) > 3000) { if (++misses > 12) { AppLog.Add("walk: the position can't be read"); return false; } continue; }
                 misses = 0;
                 last = np;
@@ -370,6 +378,13 @@ sealed class Nav
         foreach (var q in legs)
             if (!await WalkToAsync(q.x, q.y, 160, ct, 40, release: false)) { await stick.ReleaseAsync(); return await WalkToAsync(x, y, tol, ct); }
         return await WalkToAsync(x, y, tol, ct);
+    }
+
+    /// <summary>A few steps backwards (away from what the camera looks at): room to buff.</summary>
+    public async Task StepAwayAsync(CancellationToken ct)
+    {
+        await stick.PushAsync(270, 650);
+        await Task.Delay(150, ct);
     }
 
     /// <summary>Keeps the character on the spot while waiting: walks back when pushed off by more than <paramref name="tol"/>.</summary>

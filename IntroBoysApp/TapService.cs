@@ -38,6 +38,7 @@ public class TapService : AccessibilityService
         Overlay = new Overlay(this);
         License.Begin();
         Remote.Begin();
+        AppLog.CatchCrashes();
         try { StateChanged?.Invoke(); } catch { /* a listener's problem */ }
         // Nothing shows by itself: not when the phone starts, not when the app opens. The floating S appears only when the
         // member taps "Show the floating S" in the app.
@@ -262,6 +263,8 @@ public class TapService : AccessibilityService
         finally { shooting.Release(); }
     }
 
+    static Java.Nio.ByteBuffer? copyBuf;
+
     sealed class Shot : Java.Lang.Object, ITakeScreenshotCallback
     {
         readonly TaskCompletionSource<Frame?> done;
@@ -271,17 +274,30 @@ public class TapService : AccessibilityService
         {
             try
             {
-                using var hb = screenshot.HardwareBuffer;
-                using var hw = Android.Graphics.Bitmap.WrapHardwareBuffer(hb, screenshot.ColorSpace);
-                if (hw == null) { done.TrySetResult(null); return; }
-                using var bmp = hw.Copy(Android.Graphics.Bitmap.Config.Argb8888!, false)!;
-                int w = bmp.Width, h = bmp.Height;
-                var buf = Java.Nio.ByteBuffer.AllocateDirect(w * h * 4)!;
-                bmp.CopyPixelsToBuffer(buf);
-                buf.Rewind();
-                var bytes = new byte[w * h * 4];
-                buf.Get(bytes);
-                done.TrySetResult(new Frame(bytes, w, h, w * 4, System.Environment.TickCount64));
+                // 1.3.4: every native buffer is given back at once (they are big: a whole screen each), and one copy buffer is reused,
+                // so memory stays flat during a long fight
+                var hb = screenshot.HardwareBuffer;
+                Android.Graphics.Bitmap? hw = null, bmp = null;
+                try
+                {
+                    hw = Android.Graphics.Bitmap.WrapHardwareBuffer(hb, screenshot.ColorSpace);
+                    if (hw == null) { done.TrySetResult(null); return; }
+                    bmp = hw.Copy(Android.Graphics.Bitmap.Config.Argb8888!, false)!;
+                    int w = bmp.Width, h = bmp.Height, n = w * h * 4;
+                    if (copyBuf == null || copyBuf.Capacity() != n) copyBuf = Java.Nio.ByteBuffer.AllocateDirect(n)!;
+                    copyBuf.Rewind();
+                    bmp.CopyPixelsToBuffer(copyBuf);
+                    copyBuf.Rewind();
+                    var bytes = new byte[n];
+                    copyBuf.Get(bytes);
+                    done.TrySetResult(new Frame(bytes, w, h, w * 4, System.Environment.TickCount64));
+                }
+                finally
+                {
+                    try { bmp?.Recycle(); bmp?.Dispose(); } catch { }
+                    try { hw?.Recycle(); hw?.Dispose(); } catch { }
+                    try { hb.Close(); hb.Dispose(); } catch { }
+                }
             }
             catch { done.TrySetResult(null); }
         }

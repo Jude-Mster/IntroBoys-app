@@ -19,7 +19,7 @@ static class LicenseConfig
     public const string PublicKeyB64 = "__LICENSE_PUBLIC_KEY__";
 
     /// <summary>Keep in step with ApplicationDisplayVersion in IntroBoysApp.csproj.</summary>
-    public const string AppVersion = "1.3.3";
+    public const string AppVersion = "1.3.4";
 
     /// <summary>Tells the site this sign-in is a phone (the Guild Leader switches the phone Assistant on per member).</summary>
     public const string Platform = "android";

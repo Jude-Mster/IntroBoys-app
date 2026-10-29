@@ -37,6 +37,7 @@ public class AssistantActivity : Activity
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
+        AppLog.CatchCrashes();
         License.Begin();
         Remote.Begin();
         SetContentView(Build());

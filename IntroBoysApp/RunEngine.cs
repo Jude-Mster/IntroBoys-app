@@ -210,7 +210,7 @@ static class RunEngine
             if (there)
             {
                 AppLog.Add($"walk to {name}: something is still fighting us, finishing it first");
-                await FightAsync(svc, layout, "the target", ct);
+                await FightAsync(svc, layout, nav, "the target", ct);
                 await LootAsync(svc, layout, ct);
             }
             Runner.SetPhase($"walking to {name} (again)");
@@ -223,7 +223,8 @@ static class RunEngine
                 if (fights == 0) AppLog.Add($"{name}: didn't show up, going on");
                 break;
             }
-            await FightAsync(svc, layout, name, ct);
+            await BuffAsync(svc, layout, nav, ct);
+            await FightAsync(svc, layout, nav, name, ct);
             fights++;
             Runner.Kills++;
             await LootAsync(svc, layout, ct);
@@ -256,15 +257,21 @@ static class RunEngine
     /// (the bar can read empty while the boss lives): 1.5 s after it was nearly dead, 3 s otherwise, 5 s in the first 8 s of a fight;
     /// then the target is pressed once more to be sure.
     /// </summary>
-    static async Task FightAsync(TapService svc, BubbleLayout layout, string name, CancellationToken ct)
+    static async Task FightAsync(TapService svc, BubbleLayout layout, Nav nav, string name, CancellationToken ct)
     {
         Runner.SetPhase("fighting " + name);
         var start = DateTime.UtcNow;
         var fightLayout = layout.Copy();
         // only the fight buttons (no teleport / return / target spam in a fight: target is pressed when it is needed)
-        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return or BubbleKind.Target);
+        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return or BubbleKind.Target or BubbleKind.Buff);
+        // buffs don't work while attacking: they are done apart, away from the boss, when their time comes round
+        var buffs = layout.Bubbles.Where(b => b.Kind == BubbleKind.Buff && b.Mode != PressMode.Off).ToList();
+        double buffEvery = buffs.Count == 0 ? double.MaxValue : Math.Max(20, buffs.Min(b => b.Mode == PressMode.Repeat ? b.Every : 120));
+        DateTime NextBuff() => buffs.Count == 0 ? DateTime.MaxValue : lastBuff == DateTime.MinValue ? DateTime.UtcNow.AddSeconds(buffEvery) : lastBuff.AddSeconds(buffEvery);
+        var nextBuff = NextBuff();
         while (true)
         {
+            Runner.ShowPhase("fighting " + name);
             double lo = 1, hi = 0;
             DateTime? goneSince = null;
             bool dead = false, lastThere = true;
@@ -285,10 +292,16 @@ static class RunEngine
                     try { await Task.Delay(200, watch.Token); } catch { return; }
                 }
             });
-            string? why = await Runner.PressUntil(svc, fightLayout, () => dead, ct);
+            string? why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff, ct);
             watch.Cancel();
             try { await watcher; } catch { /* stopped */ }
             if (why != null && !dead) throw new Exception(why);
+            if (!dead && DateTime.UtcNow >= nextBuff)
+            {
+                await BuffAsync(svc, layout, nav, ct);
+                nextBuff = NextBuff();
+                continue;
+            }
             // make sure: target once more; a boss that is still there shows its bar again
             await Press(svc, layout, BubbleKind.Target);
             await Task.Delay(1200, ct);
@@ -301,6 +314,30 @@ static class RunEngine
             break;
         }
         AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s)");
+    }
+
+    static DateTime lastBuff = DateTime.MinValue;
+
+    /// <summary>
+    /// Buffs the way it works in the game: stop attacking, step a few steps away from the boss, press each Buff bubble with a moment
+    /// between, then the fight goes on.
+    /// </summary>
+    static async Task BuffAsync(TapService svc, BubbleLayout layout, Nav nav, CancellationToken ct)
+    {
+        var buffs = layout.Bubbles.Where(b => b.Kind == BubbleKind.Buff && b.Mode != PressMode.Off).ToList();
+        if (buffs.Count == 0) return;
+        Runner.SetPhase("buffing");
+        await nav.StepAwayAsync(ct);
+        var (w, h) = svc.ScreenSize();
+        foreach (var b in buffs)
+        {
+            var (x, y) = layout.At(b, w, h);
+            await svc.PressAsync(x, y, 80);
+            AppLog.Add("buff: " + b.Label);
+            await Task.Delay(900, ct);
+        }
+        lastBuff = DateTime.UtcNow;
+        await Task.Delay(300, ct);
     }
 
     /// <summary>The game's auto loot picks the drops up (they fall at once): press it and give it a moment.</summary>
