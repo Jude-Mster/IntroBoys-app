@@ -12,8 +12,8 @@ using Uri = Android.Net.Uri;
 namespace IntroBoys.App;
 
 /// <summary>
-/// The Assistant icon: sign in with the guild account, switch on the tap permission, show the floating S, and see the bubbles.
-/// The site's Assistant page can open it with introboys://assistant.
+/// The Assistant icon: a first-time guide (sign in, allow restricted settings, switch on taps, place bubbles) with a green check per
+/// step, the account, updates from inside the app, and the bubbles. The site's Assistant page can open it with introboys://assistant.
 /// </summary>
 [Activity(Name = "com.blacklistintroboys.guild.AssistantActivity", Label = "IntroBoys Assistant", Icon = "@mipmap/ic_assist",
           Exported = true, Theme = "@style/AppTheme", LaunchMode = LaunchMode.SingleTask, TaskAffinity = "com.blacklistintroboys.guild.assistant",
@@ -22,10 +22,15 @@ namespace IntroBoys.App;
 [IntentFilter(new[] { Intent.ActionView }, Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable }, DataScheme = "introboys", DataHost = "assistant")]
 public class AssistantActivity : Activity
 {
-    TextView? who, days, licMsg, tapState, bubbleList, runMsg, codeText, codeHint;
-    Button? signIn, signOut, recheck, tapButton, showControl, approve;
-    LinearLayout? codeBox;
-    CancellationTokenSource? signing;
+    // Android 13 and newer block the tap permission for apps installed from a file until the member allows "restricted settings"
+    static bool Restricted => OperatingSystem.IsAndroidVersionAtLeast(33);
+
+    TextView? who, days, licMsg, bubbleList, runMsg, codeText, codeHint, updText, updMsg, setupDone;
+    Button? signIn, signOut, recheck, showControl, updButton;
+    LinearLayout? codeBox, updCard;
+    Step? stepSign, stepRestricted, stepTaps, stepBubbles;
+    CancellationTokenSource? signing, updating;
+    Updater.Release? update;
     string verifyUrl = "";
 
     protected override void OnCreate(Bundle? savedInstanceState)
@@ -37,6 +42,7 @@ public class AssistantActivity : Activity
         TapService.StateChanged += OnChanged;
         Runner.Changed += OnChanged;
         BubbleLayout.Saved += OnChanged;
+        InstallResult.Message += OnInstallMessage;
         Refresh();
     }
 
@@ -44,6 +50,7 @@ public class AssistantActivity : Activity
     {
         base.OnResume();
         Refresh();
+        _ = CheckUpdateAsync();
     }
 
     protected override void OnDestroy()
@@ -52,7 +59,9 @@ public class AssistantActivity : Activity
         TapService.StateChanged -= OnChanged;
         Runner.Changed -= OnChanged;
         BubbleLayout.Saved -= OnChanged;
+        InstallResult.Message -= OnInstallMessage;
         signing?.Cancel();
+        updating?.Cancel();
         base.OnDestroy();
     }
 
@@ -82,6 +91,19 @@ public class AssistantActivity : Activity
         head.AddView(names, Ui.Weight());
         col.AddView(head, Ui.Wide());
 
+        // an update, when the site has one
+        updCard = Ui.CardBox(c, 8);
+        updCard.Background = Ui.Round(c, Ui.Card, 14, Ui.Gold);
+        updCard.AddView(Ui.Title(c, "UPDATE READY"));
+        updText = Ui.Text(c, "", 13, Ui.Soft);
+        updCard.AddView(updText);
+        updButton = Ui.Button(c, "Update now", true, () => _ = UpdateAsync());
+        updCard.AddView(updButton, Ui.Wide());
+        updMsg = Ui.Text(c, "", 12, Ui.Muted);
+        updCard.AddView(updMsg);
+        updCard.Visibility = ViewStates.Gone;
+        col.AddView(updCard, Ui.Wide());
+
         // account
         var acct = Ui.CardBox(c);
         var top = Ui.Row(c, 8);
@@ -102,10 +124,9 @@ public class AssistantActivity : Activity
         codeText = Ui.Text(c, "", 28, Ui.Gold, true);
         codeText.LetterSpacing = 0.1f;
         codeBox.AddView(codeText);
-        codeHint = Ui.Text(c, "Tap Approve: the guild site opens with this code. Check it matches, then approve it there.", 12, Ui.Soft);
+        codeHint = Ui.Text(c, "", 12, Ui.Soft);
         codeBox.AddView(codeHint);
-        approve = Ui.Button(c, "Approve on the guild site", true, () => OpenSite(verifyUrl));
-        codeBox.AddView(approve, Ui.Wide());
+        codeBox.AddView(Ui.Button(c, "Approve on the guild site", true, () => OpenSite(verifyUrl)), Ui.Wide());
         codeBox.AddView(Ui.Button(c, "Cancel", false, () => signing?.Cancel()), Ui.Wide());
         codeBox.Visibility = ViewStates.Gone;
         acct.AddView(codeBox, Ui.Wide());
@@ -120,30 +141,38 @@ public class AssistantActivity : Activity
         acct.AddView(acctButtons, Ui.Wide());
         col.AddView(acct, Ui.Wide());
 
-        // permission
-        var perm = Ui.CardBox(c);
-        perm.AddView(Ui.Title(c, "TAP PERMISSION"));
-        var (tapRow, tapVal) = Ui.Pair(c, "Taps on the game (accessibility)", "off", Ui.Gold);
-        tapState = tapVal;
-        perm.AddView(tapRow, Ui.Wide());
-        perm.AddView(Ui.Text(c,
-            "In Settings, open Accessibility, then \"Installed apps\" (or \"Downloaded apps\"), then IntroBoys Assistant taps, and switch it on.\n\n" +
-            "If Android says \"Restricted setting\": tap App info below, then the ⋮ menu at the top right, then \"Allow restricted settings\", and try again.",
-            12, Ui.Muted));
-        var permButtons = Ui.Row(c, 8);
-        tapButton = Ui.Button(c, "Open Accessibility", true, () => Open(new Intent(Settings.ActionAccessibilitySettings)));
-        permButtons.AddView(tapButton, Ui.Weight());
-        permButtons.AddView(Ui.Button(c, "App info", false, () =>
-            Open(new Intent(Settings.ActionApplicationDetailsSettings, Uri.Parse("package:" + PackageName)))), Ui.Weight());
-        perm.AddView(permButtons, Ui.Wide());
-        col.AddView(perm, Ui.Wide());
+        // first-time setup
+        var setup = Ui.CardBox(c, 12);
+        var setupHead = Ui.Row(c, 8);
+        setupHead.AddView(Ui.Title(c, "SET UP (ONCE)"), Ui.Weight());
+        setupDone = Ui.Text(c, "", 12, Ui.Green, true);
+        setupHead.AddView(setupDone);
+        setup.AddView(setupHead, Ui.Wide());
+        int n = 1;
+        stepSign = new Step(c, n++, "Sign in with the guild", "Tap Sign in above and approve the code on the guild site. You need Assistant days.");
+        setup.AddView(stepSign.View, Ui.Wide());
+        if (Restricted)
+        {
+            stepRestricted = new Step(c, n++, "Allow restricted settings",
+                "Android blocks the tap permission for apps installed from a file until you allow it. Tap App info, then the ⋮ at the top right, " +
+                "then Allow restricted settings, and confirm. No ⋮ option yet? Do step " + n + " once (Android says it was denied), then come back.");
+            stepRestricted.AddButton("App info", false, () => Open(new Intent(Settings.ActionApplicationDetailsSettings, Uri.Parse("package:" + PackageName))));
+            setup.AddView(stepRestricted.View, Ui.Wide());
+        }
+        stepTaps = new Step(c, n++, "Switch on IntroBoys Assistant taps",
+            "Tap Accessibility, then Installed apps (or Downloaded apps), then IntroBoys Assistant taps. Switch it on and tap Allow.");
+        stepTaps.AddButton("Accessibility", true, () => Open(new Intent(Settings.ActionAccessibilitySettings)));
+        setup.AddView(stepTaps.View, Ui.Wide());
+        stepBubbles = new Step(c, n++, "Place your bubbles",
+            "Tap Show the floating S, open the game, tap the S, then Bubbles. Drag a bubble onto each game button (attack, skills, buffs, auto loot) and Save.");
+        setup.AddView(stepBubbles.View, Ui.Wide());
+        setup.AddView(Ui.Text(c, "You only do this once on this phone. Updates from this screen keep everything.", 11, Ui.Muted));
+        col.AddView(setup, Ui.Wide());
 
         // run
         var run = Ui.CardBox(c);
         run.AddView(Ui.Title(c, "AUTO ATTACK"));
-        run.AddView(Ui.Text(c,
-            "1. Tap Show the floating S.\n2. Open the game.\n3. Tap the S, then Bubbles: put a bubble on each game button (attack, skills, buffs, auto loot) and Save.\n4. Tap the S, then Start.",
-            13, Ui.Soft));
+        run.AddView(Ui.Text(c, "Open the game, tap the floating S, then Start. Tap it again to Stop.", 13, Ui.Soft));
         bubbleList = Ui.Text(c, "", 13, Color.White);
         run.AddView(bubbleList);
         showControl = Ui.Button(c, "Show the floating S", true, ToggleControl);
@@ -152,8 +181,7 @@ public class AssistantActivity : Activity
         run.AddView(runMsg);
         col.AddView(run, Ui.Wide());
 
-        var guild = Ui.Button(c, "Open the guild hall", false, () => Open(new Intent(this, typeof(GuildActivity))));
-        col.AddView(guild, Ui.Wide());
+        col.AddView(Ui.Button(c, "Open the guild hall", false, () => Open(new Intent(this, typeof(GuildActivity)))), Ui.Wide());
         var foot = Ui.Text(c, "Presses only the buttons you put bubbles on, like a finger would. Nothing is changed inside the game.", 11, Color.ParseColor("#8D8D93"));
         foot.Gravity = GravityFlags.Center;
         col.AddView(foot, Ui.Wide());
@@ -177,20 +205,60 @@ public class AssistantActivity : Activity
         codeBox!.Visibility = waiting && codeText!.Text!.Length > 0 ? ViewStates.Visible : ViewStates.Gone;
 
         bool tapsOn = TapService.Instance != null;
-        tapState!.Text = tapsOn ? "on" : "off";
-        tapState.SetTextColor(tapsOn ? Ui.Green : Ui.Gold);
-        tapButton!.Text = tapsOn ? "Accessibility settings" : "Open Accessibility";
-
         var layout = BubbleLayout.Load();
+        stepSign!.Set(ok);
+        stepRestricted?.Set(tapsOn);           // can't be seen directly: done once taps could be switched on
+        stepTaps!.Set(tapsOn);
+        stepBubbles!.Set(layout.Bubbles.Count > 0);
+        setupDone!.Text = ok && tapsOn && layout.Bubbles.Count > 0 ? "ALL DONE ✓" : "";
+
         bubbleList!.Text = layout.Bubbles.Count == 0
             ? "No bubbles placed yet."
             : string.Join("\n", layout.Bubbles.Select(b => "•  " + b.Label + "  " + Bubble.Name(b.Kind) + " · " + b.Describe()));
         bool shown = TapService.Prefs.GetBoolean("show_control", false);
         showControl!.Text = shown ? "Hide the floating S" : "Show the floating S";
         runMsg!.Text = Runner.Running ? "Auto attack is running · " + Runner.Presses + " presses" :
-                       !tapsOn ? "Switch on the tap permission first." :
+                       !tapsOn ? "The floating S shows up once IntroBoys Assistant taps is switched on (set-up step " + stepTaps.Number + ")." :
                        Runner.LastStop;
+        RefreshUpdate();
     }
+
+    // ------------------------------------------------------------------ updates
+    async Task CheckUpdateAsync()
+    {
+        if (updating != null) return;
+        var r = await Updater.CheckAsync(this);
+        RunOnUiThread(() => { update = r; RefreshUpdate(); });
+    }
+
+    void RefreshUpdate()
+    {
+        if (updCard == null) return;
+        updCard.Visibility = update != null ? ViewStates.Visible : ViewStates.Gone;
+        if (update == null) return;
+        string size = update.Size > 0 ? " · " + (update.Size / 1048576.0).ToString("0.#") + " MB" : "";
+        updText!.Text = "Version " + update.Name + " (build " + update.Code + ")" + size + (update.Notes.Length > 0 ? "\n" + update.Notes : "") +
+                        (Updater.CanInstall(this) ? "" : "\n\nFirst time: Android asks you to allow this app to install updates. Switch it on, come back, and tap Update now again.");
+        updButton!.Enabled = updating == null;
+    }
+
+    async Task UpdateAsync()
+    {
+        if (update == null || updating != null) return;
+        if (!Updater.CanInstall(this)) { Open(Updater.AllowInstallIntent(this)); return; }
+        updating = new CancellationTokenSource();
+        RefreshUpdate();
+        try
+        {
+            if (Runner.Running) Runner.Stop("Stopped to update.");
+            await Updater.InstallAsync(this, update, f => RunOnUiThread(() => updMsg!.Text = "Downloading… " + (int)(f * 100) + "%"), updating.Token);
+            updMsg!.Text = "Tap Update (or Install) on Android's prompt.";
+        }
+        catch (Exception ex) { updMsg!.Text = ex.Message; }
+        finally { updating = null; RefreshUpdate(); }
+    }
+
+    void OnInstallMessage(string m) => RunOnUiThread(() => { if (updMsg != null) updMsg.Text = m; });
 
     // ------------------------------------------------------------------ actions
     async void SignIn()
@@ -225,7 +293,7 @@ public class AssistantActivity : Activity
         bool show = !TapService.Prefs.GetBoolean("show_control", false);
         TapService.SetControlVisible(show);
         if (show && TapService.Instance == null)
-            Toast.MakeText(this, "Switch on the tap permission: the S shows up as soon as it is on.", ToastLength.Long)!.Show();
+            Toast.MakeText(this, "Switch on IntroBoys Assistant taps first (set-up step " + stepTaps!.Number + "): the S shows up as soon as it is on.", ToastLength.Long)!.Show();
         else if (show)
             Toast.MakeText(this, "The S is on screen. Now open the game.", ToastLength.Short)!.Show();
         Refresh();
@@ -244,5 +312,49 @@ public class AssistantActivity : Activity
     {
         try { StartActivity(i); }
         catch { Toast.MakeText(this, "Couldn't open that on this phone.", ToastLength.Short)!.Show(); }
+    }
+
+    /// <summary>One numbered set-up step: a number that turns into a green check, a title, what to do, and its buttons.</summary>
+    sealed class Step
+    {
+        public LinearLayout View { get; }
+        public int Number { get; }
+        readonly TextView badge, title;
+        readonly LinearLayout buttons;
+        readonly Context c;
+
+        public Step(Context c, int number, string title, string detail)
+        {
+            this.c = c;
+            Number = number;
+            View = Ui.Row(c, 12);
+            View.SetGravity(GravityFlags.Top);
+            badge = new TextView(c) { Text = number.ToString(), Gravity = GravityFlags.Center };
+            badge.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+            View.AddView(badge, new LinearLayout.LayoutParams(Ui.Dp(c, 28), Ui.Dp(c, 28)));
+            var col = Ui.Column(c, 6);
+            this.title = Ui.Text(c, title, 15, Color.White, true);
+            col.AddView(this.title);
+            col.AddView(Ui.Text(c, detail, 12, Ui.Muted));
+            buttons = Ui.Row(c, 8);
+            buttons.Visibility = ViewStates.Gone;
+            col.AddView(buttons, Ui.Wide());
+            View.AddView(col, Ui.Weight());
+            Set(false);
+        }
+
+        public void AddButton(string text, bool primary, Action onClick)
+        {
+            buttons.AddView(Ui.Button(c, text, primary, onClick, 13), Ui.Weight());
+            buttons.Visibility = ViewStates.Visible;
+        }
+
+        public void Set(bool done)
+        {
+            badge.Text = done ? "✓" : Number.ToString();
+            badge.SetTextColor(done ? Ui.Ink : Color.White);
+            badge.Background = done ? Ui.Circle(Ui.Green) : Ui.Circle(Color.Transparent, Color.ParseColor("#5A5A62"), Ui.Dp(c, 2));
+            title.SetTextColor(done ? Ui.Green : Color.White);
+        }
     }
 }

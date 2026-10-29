@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write    # the built APK is kept on an apk-<branch> branch, so it can be put on the guild site
 
 jobs:
   apk:
@@ -94,6 +94,29 @@ jobs:
           sha="$("${tools}apksigner" verify --print-certs "dist/$name" 2>&1 | grep -i "SHA-256" | head -n1 | grep -oE '[0-9a-fA-F]{64}' || true)"
           echo "::notice title=Signing certificate SHA-256::$sha"
           rm -f "$RUNNER_TEMP/release.jks"
+
+      # The APK and the update file the app reads (/app/introboys-android.json on the guild site), kept on their own branch
+      - name: Keep the APK on the apk branch
+        run: |
+          apk="$(ls dist/*.apk | head -n1)"
+          ver="$(grep -oP '(?<=<ApplicationDisplayVersion>)[^<]+' IntroBoysApp/IntroBoysApp.csproj)"
+          notes="$(cat IntroBoysApp/release-notes.txt 2>/dev/null | head -c 500 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')"
+          mkdir -p rel && cp "$apk" rel/introboys.apk
+          cat > rel/introboys-android.json <<JSON
+          {
+            "versionCode": ${{ github.run_number }},
+            "versionName": "$ver",
+            "url": "https://blacklistintroboys.com/app/introboys.apk",
+            "sha256": "$(sha256sum rel/introboys.apk | cut -d' ' -f1)",
+            "size": $(stat -c %s rel/introboys.apk),
+            "notes": $notes
+          }
+          JSON
+          cd rel
+          git init -q -b "apk-${GITHUB_REF_NAME}"
+          git config user.name "github-actions"; git config user.email "actions@github.com"
+          git add . && git commit -q -m "APK $ver build ${{ github.run_number }} from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:apk-${GITHUB_REF_NAME}"
 
       - uses: actions/upload-artifact@v5
         with:
