@@ -27,6 +27,8 @@
   <ItemGroup>
     <!-- Custom Tabs and Trusted Web Activity: opens the guild site in Chrome's app mode (GuildActivity.cs) -->
     <PackageReference Include="Xamarin.AndroidX.Browser" Version="1.8.0.9" />
+    <!-- on-phone text recognition (Ocr.cs): reads the position, the map name and the teleport list from the screen -->
+    <PackageReference Include="Xamarin.Google.MLKit.TextRecognition" Version="116.0.1.6" />
   </ItemGroup>
 
 </Project>

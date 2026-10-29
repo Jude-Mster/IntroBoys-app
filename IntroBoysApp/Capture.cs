@@ -28,7 +28,8 @@ static class Capture
     /// <summary>Raised (any thread) when capture starts or stops.</summary>
     public static event System.Action? Changed;
 
-    const int LongSide = 1280;      // pictures at most 1280 px on the long side: enough to read text, light on the phone
+    // 1.3.0: the full screen size, so small text (the position under the mini-map) can be read
+    const int LongSide = 4096;
 
     internal static void Begin(Context c, MediaProjection mp)
     {
@@ -95,66 +96,58 @@ static class Capture
         reader = r;
     }
 
+    static Frame? last;
+
     /// <summary>
-    /// The latest picture of the screen (null when capture is off or nothing has been drawn yet). It is in capture pixels, a smaller
-    /// copy of the screen; <paramref name="scale"/> is capture pixels per screen pixel. The caller owns (and recycles) the bitmap.
+    /// The latest picture of the whole screen (screen pixels), or null when sharing is off or nothing came yet. When the screen has not
+    /// changed since the last look, the last picture is given again. A picture is at most 120 ms old when a new one is available.
     /// </summary>
-    public static Bitmap? Latest(Context c, out double scale)
+    public static Frame? Snap(Context c)
     {
-        scale = 1;
         lock (gate)
         {
             if (projection == null || reader == null) return null;
+            if (last != null && Environment.TickCount64 - last.At < 120) return last;
             // the phone was turned: capture the new way round
             var (w, h, _) = Size(c);
-            if ((w > h) != (capW > capH)) { MakeDisplayLocked(c); return null; }
+            if ((w > h) != (capW > capH)) { MakeDisplayLocked(c); last = null; return null; }
             Image? img = null;
             try
             {
                 img = reader.AcquireLatestImage();
-                if (img == null) return null;
+                if (img == null) return last;
                 var plane = img.GetPlanes()![0];
-                int pixelStride = plane.PixelStride, rowStride = plane.RowStride;
-                int padW = rowStride / pixelStride;
-                var full = Bitmap.CreateBitmap(padW, img.Height, Bitmap.Config.Argb8888!)!;
-                full.CopyPixelsFromBuffer(plane.Buffer!);
-                var bmp = padW == img.Width ? full : Bitmap.CreateBitmap(full, 0, 0, img.Width, img.Height)!;
-                if (!ReferenceEquals(bmp, full)) full.Recycle();
-                scale = capW / (double)Math.Max(1, ScreenW(c));
-                return bmp;
+                var buf = plane.Buffer!;
+                int stride = plane.RowStride, iw = img.Width, ih = img.Height;
+                var bytes = new byte[stride * (ih - 1) + iw * 4];
+                buf.Rewind();
+                buf.Get(bytes, 0, Math.Min(bytes.Length, buf.Remaining()));
+                last = new Frame(bytes, iw, ih, stride, Environment.TickCount64);
+                return last;
             }
-            catch { return null; }
+            catch { return last; }
             finally { img?.Close(); }
         }
-    }
-
-    static int ScreenW(Context c)
-    {
-        var wm = c.GetSystemService(Context.WindowService)!.JavaCast<IWindowManager>()!;
-        if (OperatingSystem.IsAndroidVersionAtLeast(30)) return wm.CurrentWindowMetrics.Bounds.Width();
-        var p = new Android.Graphics.Point();
-#pragma warning disable CA1422, CS0618
-        wm.DefaultDisplay!.GetRealSize(p);
-#pragma warning restore CA1422, CS0618
-        return p.X;
     }
 
     /// <summary>A small JPEG of the screen for the live view (base64), or null with the reason.</summary>
     public static (string? b64, string why) Jpeg(Context c, int width = 640, int quality = 55)
     {
         if (!On) return (null, "the phone is not sharing its screen with the Assistant (tap Allow on \"See the game\" in the app)");
-        var bmp = Latest(c, out _);
-        if (bmp == null) return (null, "no picture from the screen yet");
+        var f = Snap(c);
+        if (f == null) return (null, "no picture from the screen yet");
+        Bitmap? full = null;
         try
         {
-            int h = (int)(bmp.Height * (width / (double)bmp.Width));
-            using var small = Bitmap.CreateScaledBitmap(bmp, width, Math.Max(1, h), true)!;
+            full = f.Crop(0, 0, f.W, f.H);
+            int h = (int)(f.H * (width / (double)f.W));
+            using var small = Bitmap.CreateScaledBitmap(full, width, Math.Max(1, h), true)!;
             using var ms = new MemoryStream();
             small.Compress(Bitmap.CompressFormat.Jpeg!, quality, ms);
             return (Convert.ToBase64String(ms.ToArray()), "");
         }
         catch (Exception ex) { return (null, "the picture failed: " + ex.Message); }
-        finally { bmp.Recycle(); }
+        finally { full?.Recycle(); }
     }
 
     sealed class Ended : MediaProjection.Callback
@@ -268,5 +261,37 @@ public class CaptureActivity : Activity
         }
         else AppLog.Add("screen: sharing was not allowed");
         Finish();
+    }
+}
+
+/// <summary>One picture of the screen: RGBA bytes, rows <see cref="Stride"/> bytes apart, in screen pixels.</summary>
+sealed class Frame
+{
+    public readonly byte[] Px;
+    public readonly int W, H, Stride;
+    public readonly long At;
+    public Frame(byte[] px, int w, int h, int stride, long at) { Px = px; W = w; H = h; Stride = stride; At = at; }
+
+    /// <summary>Red, green, blue at (x, y); black outside the picture.</summary>
+    public (int r, int g, int b) Rgb(int x, int y)
+    {
+        if (x < 0 || y < 0 || x >= W || y >= H) return (0, 0, 0);
+        int i = y * Stride + x * 4;
+        return (Px[i], Px[i + 1], Px[i + 2]);
+    }
+
+    /// <summary>A part of the picture as a bitmap, made <paramref name="scale"/> times bigger (small text reads better larger).</summary>
+    public Bitmap Crop(int x, int y, int w, int h, int scale = 1)
+    {
+        x = Math.Clamp(x, 0, W - 1); y = Math.Clamp(y, 0, H - 1);
+        w = Math.Clamp(w, 1, W - x); h = Math.Clamp(h, 1, H - y);
+        var rows = new byte[w * h * 4];
+        for (int r = 0; r < h; r++) Buffer.BlockCopy(Px, (y + r) * Stride + x * 4, rows, r * w * 4, w * 4);
+        var bmp = Bitmap.CreateBitmap(w, h, Bitmap.Config.Argb8888!)!;
+        bmp.CopyPixelsFromBuffer(Java.Nio.ByteBuffer.Wrap(rows));
+        if (scale <= 1) return bmp;
+        var big = Bitmap.CreateScaledBitmap(bmp, w * scale, h * scale, true)!;
+        bmp.Recycle();
+        return big;
     }
 }
