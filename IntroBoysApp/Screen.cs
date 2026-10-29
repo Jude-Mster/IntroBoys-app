@@ -3,8 +3,14 @@ using Android.Content;
 
 namespace IntroBoys.App;
 
-/// <summary>Where the character is: the map name and the numbers under the mini-map ("[The Labyrinth (Adept)]" / "3595 , 34153").</summary>
-public readonly record struct Position(bool Ok, int X, int Y, string Map)
+/// <summary>Where the character is, in words: in town (or any map that is not a dungeon), the Labyrinth or the Den.</summary>
+public enum Place { Unknown, Town, Labyrinth, Den }
+
+/// <summary>
+/// Where the character is: the map name and the numbers under the mini-map ("[The Labyrinth (Adept)]" / "3595 , 34153").
+/// Map falls back on the last title read (for showing); Title is only what THIS picture showed (empty when it couldn't be read).
+/// </summary>
+public readonly record struct Position(bool Ok, int X, int Y, string Map, string Title = "")
 {
     public bool InLabyrinth => Map.Contains("Labyrinth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Labyr", StringComparison.OrdinalIgnoreCase);
     public bool InDen => Map.Contains("Rebirth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Den", StringComparison.Ordinal);
@@ -24,8 +30,39 @@ static class Screen
     public static Position LastPos { get; private set; }
     public static double LastHp { get; private set; } = -1;
     public static string LastMap { get; private set; } = "";
-    /// <summary>When the picture of the last reading was taken (a reading from the same picture again is no news).</summary>
-    public static long LastFrameAt { get; private set; }
+    /// <summary>1.3.7: where the character was at the last reading (town, Labyrinth, Den), and since when it has been there.</summary>
+    public static Place LastPlace { get; private set; }
+    public static string PlaceText => LastPlace switch
+    {
+        Place.Town => "Town" + (LastTitle.Length > 0 && !LastTitle.Contains("Labyr", StringComparison.OrdinalIgnoreCase) ? " " + LastTitle : ""),
+        Place.Labyrinth => "Labyrinth",
+        Place.Den => "Den of Rebirth",
+        _ => "–",
+    };
+    static string LastTitle = "";
+
+    /// <summary>
+    /// 1.3.7: which place a reading is. The mini-map title of THIS picture decides (a title that is no dungeon = town); without a title, the
+    /// coordinate: the Labyrinth runs x 2600-4700, y 800-36000 and the Den x 700-1700, y 1000-3000 - anything else is outside them.
+    /// The title is never taken from an older picture: after a death or a kick the last title still said "Labyrinth", so the run walked
+    /// on in town.
+    /// </summary>
+    public static Place PlaceOf(Position p)
+    {
+        Place byXy = !p.Ok ? Place.Unknown
+                   : p.X >= 2600 && p.X <= 4700 && p.Y >= 800 && p.Y <= 36000 ? Place.Labyrinth
+                   : p.X >= 700 && p.X <= 1700 && p.Y >= 1000 && p.Y <= 3000 ? Place.Den
+                   : Place.Town;
+        string t = p.Title;
+        if (t.Length == 0) return byXy;
+        bool Has(string w) => t.Contains(w, StringComparison.OrdinalIgnoreCase);
+        // a word or two is enough (the text reader drops letters: "[The Labyrinth (Ade", "[The Labyrinth (AdeX")
+        if (Has("Labyr") || Has("rinth") || Has("Adept")) return Place.Labyrinth;
+        if (Has("Rebirth") || Has("Rebir") || Has("Ultimate") || t.Contains("Den ", StringComparison.Ordinal) || t.Contains("Den]", StringComparison.Ordinal)) return Place.Den;
+        // another title, but the numbers are those of a dungeon: a misread title - not sure
+        if (byXy is Place.Labyrinth or Place.Den) return Place.Unknown;
+        return Place.Town;
+    }
 
     /// <summary>The position and map name (Ok false when they can't be read: sharing off, a loading screen, the mini-map closed).</summary>
     public static async Task<Position> PositionAsync()
@@ -47,7 +84,10 @@ static class Screen
             else if (l.Text.Contains('[') && l.Text.Count(char.IsLetter) >= 4) map = l.Text.Trim();
         }
         if (map.Length > 0) LastMap = map;
-        if (pos.Ok) { pos = pos with { Map = map.Length > 0 ? map : LastMap }; LastPos = pos; }
+        pos = pos with { Map = map.Length > 0 ? map : LastMap, Title = map };
+        if (pos.Ok) LastPos = pos;
+        var place = PlaceOf(pos);
+        if (place != Place.Unknown) { LastPlace = place; LastTitle = map.Length > 0 ? map : ""; }
         return pos;
     }
 

@@ -292,7 +292,7 @@ sealed class Overlay
         double hp = Screen.LastHp;
         hpBar?.Set(hp);
         if (hpText != null) hpText.Text = "boss HP " + (hp >= 0 ? Math.Round(hp * 100) + "%" : "–");
-        if (posText != null) posText.Text = "position " + Screen.LastPos;
+        if (posText != null) posText.Text = "where: " + Screen.PlaceText + " · position " + Screen.LastPos;
         if (screenNote != null)
         {
             screenNote.Text = !Capture.CanSee ? "This phone needs Live record on to read the screen (Android 10)."

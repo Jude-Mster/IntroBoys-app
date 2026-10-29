@@ -11,7 +11,7 @@ static class RunEngine
 {
     // the five Labyrinth bosses and the Den (LOD) boss always spawn at the same place (from the PC Assistant)
     static readonly (int x, int y)[] LabySpots = { (3616, 28733), (3796, 22424), (3624, 16208), (3602, 9365), (3318, 1924) };
-    static readonly (int x, int y) DenSpot = (1203, 2352);
+    static readonly (int x, int y) DenSpot = (1205, 2383);      // 1.3.7: where the character fights the LOD boss (PC 4.11.1)
     const double SpotTol = 150;               // close enough to a boss spot (map units)
     const double SpawnTimeout = 90;            // longest wait for a boss to show up
     const double FightTimeout = 240;           // longest fight
@@ -74,7 +74,9 @@ static class RunEngine
             ct.ThrowIfCancellationRequested();
             Runner.SetPhase($"{Runner.ModeName(mode)} run {run}: starting");
             var here = await nav.ReadAsync(ct);
-            bool inside = here.Ok && (den ? here.InDen : here.InLabyrinth);
+            var place = await PlaceNowAsync(nav, ct);
+            AppLog.Add("where: " + Screen.PlaceText);
+            bool inside = here.Ok && place == Target(den);
             int first = 0;
             if (!inside)
             {
@@ -88,6 +90,10 @@ static class RunEngine
                 arrivedAt = DateTime.UtcNow;
                 await ArriveAsync(svc, layout, nav, den, ct);
             }
+            else if (!den && restartAtOne)
+            {
+                AppLog.Add("back in the Labyrinth after a kick: starting at boss 1");
+            }
             else if (!den)
             {
                 // already inside (a stopped run): carry on at the nearest boss
@@ -96,6 +102,7 @@ static class RunEngine
                 AppLog.Add($"already in the Labyrinth: starting at boss {first + 1}");
             }
 
+            restartAtOne = false;
             bool kicked = false;
             if (den) kicked = !await BossAsync(svc, layout, nav, DenSpot, "the Den boss", true, ct, 5);
             else
@@ -105,7 +112,10 @@ static class RunEngine
             if (kicked)
             {
                 if (++kicks > 10) throw new Exception("kicked out of the dungeon too often");
-                AppLog.Add("not in the dungeon any more: starting over from the teleport");
+                // 1.3.7: back to the run from stage 1 (boss 1): wait for the town to load, then the teleport again
+                AppLog.Add($"kicked out ({Screen.PlaceText}): back to the run, starting at boss 1 again");
+                Runner.SetPhase("kicked out - back to the run");
+                restartAtOne = true;
                 run--;
                 await Task.Delay(5000, ct);
                 continue;
@@ -155,7 +165,7 @@ static class RunEngine
         while (DateTime.UtcNow < until)
         {
             var p = await nav.ReadAsync(ct, 1);
-            if (p.Ok && (den ? p.InDen : p.InLabyrinth)) { arrivedAt = DateTime.UtcNow; AppLog.Add("arrived: " + p.Map + " at " + p); return true; }
+            if (p.Ok && Screen.PlaceOf(p) == Target(den)) { arrivedAt = DateTime.UtcNow; AppLog.Add("arrived: " + Screen.PlaceText + " at " + p); return true; }
             await Task.Delay(800, ct);
         }
         AppLog.Add("teleport: didn't arrive (map: " + Screen.LastMap + ")");
@@ -198,10 +208,11 @@ static class RunEngine
     static async Task<bool> BossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, bool den, CancellationToken ct, int routeIndex = -1)
     {
         Runner.SetPhase("walking to " + name);
+        bool there = false;
         for (int tries = 0; tries < 4; tries++)
         {
             var way = Route(routeIndex);
-            if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) break;
+            if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
             var p = nav.Last;
             if (await OutsideAsync(nav, den, ct)) return false;
             // the character won't move: usually a boss or monster is still fighting it
@@ -215,10 +226,22 @@ static class RunEngine
             }
             Runner.SetPhase($"walking to {name} (again)");
         }
+        if (!there)
+        {
+            // 1.3.7: never got there: look harder at where the character is (a death or a kick takes a few seconds to show the town)
+            for (int i = 0; i < 4; i++)
+            {
+                if (await OutsideAsync(nav, den, ct)) return false;
+                await Task.Delay(1500, ct);
+            }
+            AppLog.Add($"{name}: couldn't get to the spot, waiting where it is");
+        }
         int fights = 0;
         while (true)
         {
-            if (!await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, ct))
+            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct);
+            if (up < 0) return false;                          // 1.3.7: not in the dungeon any more
+            if (up == 0)
             {
                 if (fights == 0) AppLog.Add($"{name}: didn't show up, going on");
                 break;
@@ -233,22 +256,32 @@ static class RunEngine
         return !await OutsideAsync(nav, den, ct);
     }
 
-    /// <summary>Targets until the boss's HP bar shows (the boss spawned). False when it didn't within <paramref name="secs"/>.</summary>
-    static async Task<bool> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, CancellationToken ct)
+    /// <summary>
+    /// Targets until the boss's HP bar shows (the boss spawned): 1. 0 when it didn't within <paramref name="secs"/>; -1 when the character
+    /// is not in the dungeon any more (1.3.7: looked at every 5 s - it used to walk on toward the boss spot in town).
+    /// </summary>
+    static async Task<int> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, bool den, CancellationToken ct)
     {
         Runner.SetPhase("waiting for " + name);
         var until = DateTime.UtcNow.AddSeconds(secs);
+        var nextPlace = DateTime.UtcNow.AddSeconds(5);
         var nextTarget = DateTime.MinValue;
         var nextHold = DateTime.UtcNow.AddSeconds(4);
         while (DateTime.UtcNow < until)
         {
             ct.ThrowIfCancellationRequested();
-            if (await Screen.BossHpAsync(layout) > 0) { AppLog.Add($"{name}: HP bar up"); return true; }
+            if (await Screen.BossHpAsync(layout) > 0) { AppLog.Add($"{name}: HP bar up"); return 1; }
+            if (DateTime.UtcNow >= nextPlace)
+            {
+                nextPlace = DateTime.UtcNow.AddSeconds(5);
+                var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
+                if (pl != Place.Unknown && pl != Target(den) && await OutsideAsync(nav, den, ct)) return -1;
+            }
             if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(3); }
             if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
             await Task.Delay(300, ct);
         }
-        return false;
+        return 0;
     }
 
     /// <summary>
@@ -322,18 +355,37 @@ static class RunEngine
 
     static DateTime lastBuff = DateTime.MinValue;
 
+    static Place Target(bool den) => den ? Place.Den : Place.Labyrinth;
+    static bool restartAtOne;
+
+    /// <summary>Where the character is now (a few looks until one can be read).</summary>
+    static async Task<Place> PlaceNowAsync(Nav nav, CancellationToken ct)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
+            if (pl != Place.Unknown) return pl;
+            await Task.Delay(400, ct);
+        }
+        return Place.Unknown;
+    }
+
     /// <summary>
-    /// Kicked out of the dungeon? Only when the mini-map title reads another map twice, a second apart (one misread is not enough).
+    /// Kicked out of the dungeon (or died and woke up in town)? 1.3.7: from the place of each picture (its own mini-map title, else its
+    /// coordinate - never an older title): three looks that say another place and none that says this dungeon, within about 4 s.
     /// </summary>
     static async Task<bool> OutsideAsync(Nav nav, bool den, CancellationToken ct)
     {
-        for (int i = 0; i < 2; i++)
+        int outside = 0;
+        for (int i = 0; i < 6 && outside < 3; i++)
         {
-            if (i > 0) await Task.Delay(1000, ct);
-            var p = await nav.ReadAsync(ct, 1);
-            if (!p.Ok || p.Map.Length == 0 || (den ? p.InDen : p.InLabyrinth)) return false;
+            if (i > 0) await Task.Delay(700, ct);
+            var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
+            if (pl == Target(den)) return false;
+            if (pl != Place.Unknown) outside++;
         }
-        AppLog.Add("map: " + Screen.LastMap);
+        if (outside < 3) return false;
+        AppLog.Add("where: " + Screen.PlaceText + " - not in " + (den ? "the Den" : "the Labyrinth") + " any more");
         return true;
     }
 

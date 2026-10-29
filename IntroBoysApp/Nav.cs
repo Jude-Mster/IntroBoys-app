@@ -323,7 +323,9 @@ sealed class Nav
         if (p.Dist(x, y) <= tol) return true;
         AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
         var history = new List<(DateTime t, double d)>();
-        int detours = 0, misses = 0, flips = 0;
+        int detours = 0, misses = 0, flips = 0, jumps = 0;
+        bool rechecked = false;
+        var startPlace = Screen.PlaceOf(p);
         Position firstStuck = default;
         double detour = 0;
         DateTime detourUntil = DateTime.MinValue;
@@ -347,7 +349,14 @@ sealed class Nav
                 long seenAt = Screen.LastFrameAt;
                 var np = await Screen.PositionAsync();
                 if (Screen.LastFrameAt == seenAt) { await Task.Delay(60, ct); continue; }      // the same picture: no news
-                if (!np.Ok || np.Dist(prev.X, prev.Y) > 3000) { if (++misses > 12) { AppLog.Add("walk: the position can't be read"); return false; } continue; }
+                if (!np.Ok || np.Dist(prev.X, prev.Y) > 3000)
+                {
+                    // 1.3.7: a far jump that the map title agrees with is no misread: the character is somewhere else now (died, kicked)
+                    var pl = Screen.PlaceOf(np);
+                    if (np.Ok && np.Title.Length > 0 && pl != Place.Unknown && pl != startPlace && ++jumps >= 2) { AppLog.Add($"walk: the map changed ({Screen.PlaceText} at {np})"); return false; }
+                    if (++misses > 12) { AppLog.Add("walk: the position can't be read"); return false; }
+                    continue;
+                }
                 misses = 0;
                 last = np;
 
@@ -384,7 +393,25 @@ sealed class Nav
                 {
                     if (++detours > 8) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
-                    else if (detours >= 3 && firstStuck.Ok && p.Dist(firstStuck.X, firstStuck.Y) < 40)
+                    // 1.3.7: stuck twice - the camera may have been turned (by hand, by accident): measure again which way the stick goes
+                    // (a step and the same step back) before walking round, so the detours go the right way
+                    if (detours == 2 && !rechecked)
+                    {
+                        rechecked = true;
+                        await stick.ReleaseAsync();
+                        AppLog.Add("walk: stuck - checking which way the camera looks (turned?)");
+                        if (!await CalibrateAsync(ct))
+                        {
+                            AppLog.Add($"walk: not moving at all at {p} (dead, a window open, or boxed in)");
+                            return false;
+                        }
+                        history.Clear(); prevStick = double.NaN;
+                        var rp = await ReadAsync(ct, 1);
+                        if (rp.Ok) { p = rp; prev = rp; }
+                        detourUntil = DateTime.MinValue;
+                        continue;
+                    }
+                    if (detours >= 3 && firstStuck.Ok && p.Dist(firstStuck.X, firstStuck.Y) < 40)
                     {
                         AppLog.Add($"walk: not moving at all at {p}");
                         return false;
