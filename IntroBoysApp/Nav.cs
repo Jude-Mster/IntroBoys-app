@@ -210,7 +210,11 @@ sealed class Nav
         var cam = layout.Find(BubbleKind.Camera);
         if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
         if (!known && !await CalibrateAsync(ct)) return;
-        double perPx = Prefs.GetFloat("cam_deg_per_px", 0);
+        // 1.4.2: how far a drag turns the view is kept per screen size (a 720p cloud phone turns very differently from a 1080p phone);
+        // a phone that already learned it under the old name keeps using that
+        var (sw, sh) = svc.ScreenSize();
+        string key = $"cam_deg_per_px_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}";
+        double perPx = Prefs.GetFloat(key, Prefs.GetFloat("cam_deg_per_px", 0));
         if (Math.Abs(perPx) < 0.01)
         {
             // the first time on this phone: one smooth drag, then measure how far it turned the view
@@ -221,20 +225,41 @@ sealed class Nav
             double turned = Norm(Forward - before);
             if (Math.Abs(turned) < 3) { AppLog.Add("camera: the drag didn't turn the view (put the camera area on open ground)"); return; }
             perPx = turned / d;
-            Prefs.Edit()!.PutFloat("cam_deg_per_px", (float)perPx)!.Apply();
+            Prefs.Edit()!.PutFloat(key, (float)perPx)!.Apply();
             AppLog.Add($"camera: a 100 px drag turns {perPx * 100:0}°");
         }
-        for (int i = 0; i < 3; i++)
+        // 1.4.2: turn, look, and learn from what the turn really did. On phones where it lands (within 40°) nothing changes; where it
+        // doesn't (the cloud phone: asked for 138°, got 29°; asked for -50°, got 200°), the drag size is corrected from each turn, turns
+        // are kept to 90° at a time, and after 6 tries or 40 s it goes on anyway - the walk steers by the measured direction, not the view.
+        var t0 = DateTime.UtcNow;
+        bool careful = false;
+        for (int i = 0; i < 6 && (DateTime.UtcNow - t0).TotalSeconds < 40; i++)
         {
             double err = Norm(toward - Forward);
-            if (Math.Abs(err) <= 10) { AppLog.Add($"camera: looking at the gate ({(int)Forward}°)"); return; }
-            AppLog.Add($"camera: turning {(int)err}° toward the gate");
-            float px = (float)(err / perPx);
+            if (Math.Abs(err) <= 12) { AppLog.Add($"camera: looking at the gate ({(int)Forward}°)"); return; }
+            double ask = careful ? Math.Clamp(err, -90, 90) : err;
+            AppLog.Add($"camera: turning {(int)ask}° toward the gate");
+            double before = Forward;
+            float px = (float)(ask / perPx);
             await TurnAsync(px, ct);
             off = Norm(off + px * perPx);                       // where the turn should have put it
             await Task.Delay(250, ct);
             if (!await CalibrateAsync(ct)) return;             // and where it really is (a step and back)
+            double got = Norm(Forward - before);
+            if (Math.Abs(got - ask) <= 40) continue;           // close to what was asked: the drag size is right
+            careful = true;
+            double was = perPx;
+            if (Math.Abs(got) >= 5)
+            {
+                double seen = got / px;
+                perPx = Math.Sign(seen) != Math.Sign(perPx) ? seen : perPx * 0.4 + seen * 0.6;
+            }
+            else perPx *= 0.6;                                  // hardly turned: bigger drags
+            perPx = Math.Sign(perPx) * Math.Clamp(Math.Abs(perPx), 0.02, 3.0);
+            Prefs.Edit()!.PutFloat(key, (float)perPx)!.Apply();
+            AppLog.Add($"camera: asked {(int)ask}°, turned {(int)got}° - a 100 px drag turns about {perPx * 100:0}° on this screen (was {was * 100:0}°)");
         }
+        AppLog.Add($"camera: close enough ({(int)Forward}°), going on");
     }
 
     /// <summary>
