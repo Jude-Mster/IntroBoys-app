@@ -85,8 +85,14 @@ jobs:
           name="IntroBoys-${ver}-build${{ github.run_number }}.apk"
           mkdir -p dist && cp "$apk" "dist/$name"
           ls -la dist
-          signer="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n1)apksigner"
-          "$signer" verify --print-certs "dist/$name" | grep -E "Signer #1 certificate (DN|SHA-256)" || true
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n1)"
+          # shown on the run's page: what was built, and the signing certificate's fingerprint (public; the site's
+          # /.well-known/assetlinks.json needs it so the guild hall opens full screen)
+          badge="$("${tools}aapt2" dump badging "dist/$name")"
+          echo "::notice title=APK::$name · $(du -h "dist/$name" | cut -f1) · $(echo "$badge" | grep -oP "^package: name='[^']+' versionCode='[^']+' versionName='[^']+'") · $(echo "$badge" | grep -oP "^sdkVersion:'[0-9]+'")"
+          echo "::notice title=Launchers::$(echo "$badge" | grep -oP "launchable-activity: name='[^']+'  label='[^']*'" | tr '\n' ' ')"
+          sha="$("${tools}apksigner" verify --print-certs "dist/$name" | grep -oP '(?<=Signer #1 certificate SHA-256 digest: )[0-9a-f]+')"
+          echo "::notice title=Signing certificate SHA-256::$sha"
           rm -f "$RUNNER_TEMP/release.jks"
 
       - uses: actions/upload-artifact@v5
