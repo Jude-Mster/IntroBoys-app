@@ -29,6 +29,16 @@
     <PackageReference Include="Xamarin.AndroidX.Browser" Version="1.8.0.9" />
     <!-- on-phone text recognition (Ocr.cs): reads the position, the map name and the teleport list from the screen -->
     <PackageReference Include="Xamarin.Google.MLKit.TextRecognition" Version="116.0.1.6" />
+    <!-- the text recognition pulls in androidx compose annotations twice (an Android and a plain Java copy of the same classes):
+         keep only the Android one, or the build stops with "Type androidx.compose.runtime.Immutable is defined multiple times" -->
+    <PackageReference Include="Xamarin.AndroidX.Compose.Runtime.Annotation.Jvm" Version="1.10.0.1" ExcludeAssets="build;buildTransitive" />
   </ItemGroup>
+
+  <Target Name="DropDuplicateComposeAnnotations" BeforeTargets="_CompileToDalvik;_CompileJava;_ResolveLibraryProjectImports">
+    <ItemGroup>
+      <AndroidJavaLibrary Remove="@(AndroidJavaLibrary)" Condition="$([System.String]::Copy('%(Identity)').Contains('runtime-annotation-jvm'))" />
+      <AndroidLibrary Remove="@(AndroidLibrary)" Condition="$([System.String]::Copy('%(Identity)').Contains('runtime-annotation-jvm'))" />
+    </ItemGroup>
+  </Target>
 
 </Project>
