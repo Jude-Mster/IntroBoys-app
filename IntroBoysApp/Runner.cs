@@ -2,14 +2,15 @@ using Android.OS;
 
 namespace IntroBoys.App;
 
-/// <summary>
-/// Auto attack: presses the member's bubbles over and over. "Hold" bubbles (attack) are pressed down for about a second at a time,
-/// again and again; "Every…" bubbles (target, skills, buffs, potion, auto loot) when their time comes round, in between; "Once"
-/// bubbles at the start. One press at a time, so a press never cuts another short. Stops by itself without a valid license.
-/// </summary>
 /// <summary>What Start does: auto attack on the spot, or a Labyrinth or Den run.</summary>
 public enum RunMode { Attack, Labyrinth, Den }
 
+/// <summary>
+/// Starts and stops what the Assistant does. Auto attack presses the member's bubbles over and over: "Hold" bubbles (attack) are
+/// pressed down for about a second at a time, again and again; "Every…" bubbles (target, skills, buffs, potion, auto loot) when their
+/// time comes round, in between; "Once" bubbles at the start. One press at a time, so a press never cuts another short. Labyrinth and
+/// Den runs are in RunEngine.cs. Everything stops by itself without a valid license.
+/// </summary>
 static class Runner
 {
     static Android.Content.ISharedPreferences Prefs => TapService.Prefs;
@@ -41,6 +42,12 @@ static class Runner
     const int HoldMs = 900, TapMs = 70, GapMs = 45;
 
     public static bool Running { get; private set; }
+    /// <summary>What the run is doing right now ("walking to boss 2", "fighting boss 2" ...), for the panel and the website.</summary>
+    public static string Phase { get; private set; } = "";
+    public static RunMode RunningMode { get; private set; }
+    public static int Cycles { get; set; }
+    public static int Kills { get; set; }
+    public static void SetPhase(string p) { Phase = p; AppLog.Add(p); Raise(); }
     public static string LastStop { get; private set; } = "";
     public static int Presses { get; private set; }
     /// <summary>Raised (any thread) when it starts, stops, or every few presses.</summary>
@@ -56,25 +63,40 @@ static class Runner
     public static string? Start(RunMode? mode = null)
     {
         var m = mode ?? Mode;
-        if (m != RunMode.Attack)
-            return ModeName(m) + " runs need the screen reading (boss HP bar, position) set up for the phone game first: coming in the next update. Auto attack works now.";
         var svc = TapService.Instance;
         if (svc == null) return "Turn on the tap permission in the app first.";
         if (!License.Allowed()) return License.Why();
         var layout = BubbleLayout.Load();
         if (!layout.Bubbles.Any(b => b.Mode != PressMode.Off && !b.IsArea)) return "Place at least one bubble first (tap Bubbles).";
+        if (m != RunMode.Attack && RunEngine.Missing(layout) is { } missing) return missing;
         lock (gate)
         {
             if (Running) return null;
             cts = new CancellationTokenSource();
             Running = true;
-            Presses = 0;
+            RunningMode = m;
+            Presses = 0; Cycles = 0; Kills = 0;
             LastStop = "";
+            Phase = "";
             startedAt = SystemClock.ElapsedRealtime();
         }
         var ct = cts.Token;
-        _ = Task.Run(() => Loop(svc, layout, ct));
-        AppLog.Add("start: auto attack (" + layout.Bubbles.Count(b => b.Mode != PressMode.Off && !b.IsArea) + " bubbles)");
+        if (m == RunMode.Attack)
+        {
+            _ = Task.Run(() => Loop(svc, layout, ct));
+            AppLog.Add("start: auto attack (" + layout.Bubbles.Count(b => b.Mode != PressMode.Off && !b.IsArea) + " bubbles)");
+        }
+        else
+        {
+            AppLog.Add("start: " + ModeName(m) + (Runs == 0 ? " until stopped" : ", " + Runs + " runs"));
+            _ = Task.Run(async () =>
+            {
+                try { await RunEngine.RunAsync(svc, m, layout, Runs, ct); Stop("Done: " + Cycles + " " + ModeName(m) + " runs."); }
+                catch (System.OperationCanceledException) { }
+                catch (LicenseException ex) { Stop("Stopped: " + ex.Message); }
+                catch (Exception ex) { Stop("Stopped: " + ex.Message); }
+            });
+        }
         Raise();
         return null;
     }
@@ -102,20 +124,37 @@ static class Runner
     {
         var t = TimeSpan.FromMilliseconds(Math.Max(0, SystemClock.ElapsedRealtime() - startedAt));
         string time = t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:D2}m" : $"{t.Minutes}m {t.Seconds:D2}s";
-        return $"running {time} · {Presses} presses\nLicense: {License.TimeLeftText()} left";
+        return RunningMode == RunMode.Attack
+            ? $"running {time} · {Presses} presses\nLicense: {License.TimeLeftText()} left"
+            : $"run {Cycles + 1} · {Kills} kills · {time}\nLicense: {License.TimeLeftText()} left";
     }
 
     static async Task Loop(TapService svc, BubbleLayout layout, CancellationToken ct)
+    {
+        try
+        {
+            string? why = await PressUntil(svc, layout, () => false, ct);
+            Stop(why ?? "Done: every bubble was pressed.");
+        }
+        catch (System.OperationCanceledException) { }
+        catch (LicenseException ex) { Stop("Stopped: " + ex.Message); }
+        catch (Exception ex) { Stop("Stopped: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// Presses the bubbles (as auto attack does) until <paramref name="done"/> says so. Returns null when done (or every bubble was
+    /// pressed once), otherwise why it had to stop.
+    /// </summary>
+    public static async Task<string?> PressUntil(TapService svc, BubbleLayout layout, Func<bool> done, CancellationToken ct)
     {
         var list = layout.Bubbles;
         var due = new long[list.Count];
         for (int i = 0; i < list.Count; i++) due[i] = list[i].Mode == PressMode.Off || list[i].IsArea ? long.MaxValue : 0;
         int failed = 0;
-        try
         {
-            while (!ct.IsCancellationRequested)
+            while (!ct.IsCancellationRequested && !done())
             {
-                if (!License.Allowed()) { Stop("Stopped: " + License.Why()); return; }
+                if (!License.Allowed()) return "Stopped: " + License.Why();
 
                 // the bubble whose turn it is: the one waiting longest
                 long now = SystemClock.UptimeMillis();
@@ -125,7 +164,7 @@ static class Runner
                 if (pick < 0)
                 {
                     long next = due.Min();
-                    if (next == long.MaxValue) { Stop("Done: every bubble was pressed."); return; }
+                    if (next == long.MaxValue) return null;
                     await Task.Delay((int)Math.Clamp(next - now, 10, 200), ct);
                     continue;
                 }
@@ -134,7 +173,7 @@ static class Runner
                 var (w, h) = svc.ScreenSize();
                 var (x, y) = layout.At(b, w, h);
                 bool ok = await svc.PressAsync(x, y, b.Mode == PressMode.Hold ? HoldMs : TapMs);
-                if (ct.IsCancellationRequested) return;
+                ct.ThrowIfCancellationRequested();
                 Pressed?.Invoke(pick);
                 if (b.Mode != PressMode.Hold || Presses == 0) AppLog.Add((b.Mode == PressMode.Hold ? "attack: holding " : "press ") + b.Label + (ok ? "" : " (cancelled)"));
 
@@ -147,12 +186,11 @@ static class Runner
                 };
 
                 if (ok) { failed = 0; Presses++; if (Presses % 5 == 0) Raise(); }
-                else if (++failed >= 12) { Stop("Stopped: the taps keep being cancelled (is the screen off, or is something on top of the game?)."); return; }
+                else if (++failed >= 12) return "Stopped: the taps keep being cancelled (is the screen off, or is something on top of the game?).";
                 await Task.Delay(GapMs, ct);
             }
         }
-        catch (System.OperationCanceledException) { }
-        catch (LicenseException ex) { Stop("Stopped: " + ex.Message); }
-        catch (Exception ex) { Stop("Stopped: " + ex.Message); }
+        ct.ThrowIfCancellationRequested();
+        return null;
     }
 }

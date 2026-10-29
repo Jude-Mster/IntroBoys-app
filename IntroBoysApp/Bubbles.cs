@@ -8,7 +8,7 @@ namespace IntroBoys.App;
 public enum PressMode { Hold, Repeat, Once, Off }
 
 /// <summary>What a bubble sits on in the game.</summary>
-public enum BubbleKind { Attack, Target, Skill, Buff, Potion, AutoLoot, Other, Teleport, Return, Camera, MovePad }
+public enum BubbleKind { Attack, Target, Skill, Buff, Potion, AutoLoot, Other, Teleport, Return, Camera, MovePad, BossBar }
 
 /// <summary>One step of the camera fix after a teleport: drag the view one way, or zoom.</summary>
 public enum CamOp { Left, Right, Up, Down, ZoomIn, ZoomOut }
@@ -50,6 +50,7 @@ public sealed class Bubble
         BubbleKind.Return => "RET",
         BubbleKind.Camera => "CAM",
         BubbleKind.MovePad => "PAD",
+        BubbleKind.BossBar => "BAR",
         _ => "BTN"
     };
 
@@ -65,6 +66,7 @@ public sealed class Bubble
         BubbleKind.Return => "Return",
         BubbleKind.Camera => "Camera area",
         BubbleKind.MovePad => "Move pad",
+        BubbleKind.BossBar => "Boss HP bar",
         _ => "Other"
     };
 
@@ -81,6 +83,7 @@ public sealed class Bubble
         BubbleKind.Return => "#1FB5A8",
         BubbleKind.Camera => "#78BEFF",
         BubbleKind.MovePad => "#5EE08F",
+        BubbleKind.BossBar => "#FF5A5F",
         _ => "#5C6BC0"
     };
 
@@ -97,13 +100,16 @@ public sealed class Bubble
         BubbleKind.Teleport or BubbleKind.Return => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
         BubbleKind.Camera => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
         BubbleKind.MovePad => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
+        BubbleKind.BossBar => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
         _ => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Repeat, Every = 5 }
     };
 
     public Bubble Copy() => (Bubble)MemberwiseClone();
 
     /// <summary>Areas, not buttons: the camera area and the move pad are never tapped by auto attack.</summary>
-    public bool IsArea => Kind is BubbleKind.Camera or BubbleKind.MovePad;
+    public bool IsArea => Kind is BubbleKind.Camera or BubbleKind.MovePad or BubbleKind.BossBar;
+    /// <summary>A box (camera area, boss HP bar), sized by width and height.</summary>
+    public bool IsBox => Kind is BubbleKind.Camera or BubbleKind.BossBar;
 
     public string Describe() => IsArea ? "used for moving and the camera" : Mode switch
     {

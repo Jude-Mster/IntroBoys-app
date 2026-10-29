@@ -184,7 +184,8 @@ public class AssistantActivity : Activity
         var run = Ui.CardBox(c);
         run.AddView(Ui.Title(c, "RUN"));
         run.AddView(Ui.Text(c, "Open the game and tap the floating S: pick Attack, Labyrinth or Den, then Start. " +
-                               "Auto attack works now; Labyrinth and Den runs come once the screen reading is set up for the phone game.", 13, Ui.Soft));
+                               "Runs need screen sharing on and, in Bubbles: Attack, Target, Teleport (on the scroll), Return, Auto loot, the Move pad, " +
+                               "the Camera area and the Boss HP bar box.", 13, Ui.Soft));
         totalsText = Ui.Text(c, "", 13, Color.White, true);
         run.AddView(totalsText);
         bubbleList = Ui.Text(c, "", 13, Color.White);
@@ -193,6 +194,7 @@ public class AssistantActivity : Activity
         run.AddView(showControl, Ui.Wide());
         runMsg = Ui.Text(c, "", 12, Ui.Muted);
         run.AddView(runMsg);
+        run.AddView(Ui.Button(c, "Share the log", false, ShareLog), Ui.Wide());
         col.AddView(run, Ui.Wide());
 
         col.AddView(Ui.Button(c, "Open the guild hall", false, () => Open(new Intent(this, typeof(GuildActivity)))), Ui.Wide());
@@ -304,6 +306,16 @@ public class AssistantActivity : Activity
             codeText.Text = "";
             Refresh();
         }
+    }
+
+    /// <summary>Sends the live log (the last 500 lines) wherever the member wants: Messenger, Discord, email ...</summary>
+    void ShareLog()
+    {
+        var i = new Intent(Intent.ActionSend);
+        i.SetType("text/plain");
+        i.PutExtra(Intent.ExtraSubject, "IntroBoys Assistant log " + LicenseConfig.AppVersion);
+        i.PutExtra(Intent.ExtraText, "IntroBoys Assistant " + LicenseConfig.AppVersion + "\n" + AppLog.All());
+        Open(Intent.CreateChooser(i, "Share the log")!);
     }
 
     void ToggleControl()

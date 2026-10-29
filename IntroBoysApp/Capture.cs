@@ -107,7 +107,7 @@ static class Capture
         lock (gate)
         {
             if (projection == null || reader == null) return null;
-            if (last != null && Environment.TickCount64 - last.At < 120) return last;
+            if (last != null && System.Environment.TickCount64 - last.At < 120) return last;
             // the phone was turned: capture the new way round
             var (w, h, _) = Size(c);
             if ((w > h) != (capW > capH)) { MakeDisplayLocked(c); last = null; return null; }
@@ -122,7 +122,7 @@ static class Capture
                 var bytes = new byte[stride * (ih - 1) + iw * 4];
                 buf.Rewind();
                 buf.Get(bytes, 0, Math.Min(bytes.Length, buf.Remaining()));
-                last = new Frame(bytes, iw, ih, stride, Environment.TickCount64);
+                last = new Frame(bytes, iw, ih, stride, System.Environment.TickCount64);
                 return last;
             }
             catch { return last; }

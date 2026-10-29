@@ -1,1 +1,1 @@
-New floating panel: boss HP, position, live log, Attack / Labyrinth / Den, runs, totals. Camera area, move pad and the camera fix after a teleport. Screen sharing for the website's live view.
+Labyrinth and Den runs: teleport, zoom out and face the way, walk to each boss by the position on the mini-map, fight until the boss HP bar is gone, auto loot, return. New: Boss HP bar box, live position on the panel, Share the log.

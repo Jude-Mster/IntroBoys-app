@@ -1,0 +1,92 @@
+using System.Text.RegularExpressions;
+using Android.Content;
+
+namespace IntroBoys.App;
+
+/// <summary>Where the character is: the map name and the numbers under the mini-map ("[The Labyrinth (Adept)]" / "3595 , 34153").</summary>
+public readonly record struct Position(bool Ok, int X, int Y, string Map)
+{
+    public bool InLabyrinth => Map.Contains("Labyrinth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Labyr", StringComparison.OrdinalIgnoreCase);
+    public bool InDen => Map.Contains("Rebirth", StringComparison.OrdinalIgnoreCase) || Map.Contains("Den", StringComparison.Ordinal);
+    public double Dist(int x, int y) => Math.Sqrt((double)(X - x) * (X - x) + (double)(Y - y) * (Y - y));
+    public override string ToString() => Ok ? $"{X} , {Y}" : "–";
+}
+
+/// <summary>
+/// Reading the phone game's screen (with screen sharing on): the position under the mini-map, the map name, and the boss HP bar in the
+/// box the member placed over it. The latest readings are kept for the floating panel and the website.
+/// </summary>
+static class Screen
+{
+    static readonly Regex Coord = new(@"(\d{2,5})\s*[,.;:]\s*(\d{2,5})", RegexOptions.Compiled);
+    static Context C => Android.App.Application.Context;
+
+    public static Position LastPos { get; private set; }
+    public static double LastHp { get; private set; } = -1;
+    public static string LastMap { get; private set; } = "";
+
+    /// <summary>The position and map name (Ok false when they can't be read: sharing off, a loading screen, the mini-map closed).</summary>
+    public static async Task<Position> PositionAsync()
+    {
+        var f = Capture.Snap(C);
+        if (f == null) return default;
+        // the mini-map title and the numbers under it: the top right corner
+        int x = (int)(f.W * 0.80), y = (int)(f.H * 0.035), w = f.W - x, h = (int)(f.H * 0.10);
+        var lines = await Ocr.ReadAsync(f, x, y, w, h, 2);
+        string map = "";
+        Position pos = default;
+        foreach (var l in lines.OrderBy(l => l.Y))
+        {
+            var m = Coord.Match(l.Text);
+            if (m.Success && !pos.Ok && int.TryParse(m.Groups[1].Value, out int px) && int.TryParse(m.Groups[2].Value, out int py))
+                pos = new Position(true, px, py, "");
+            else if (l.Text.Contains('[') || l.Text.Contains('(') || l.Text.Any(char.IsLetter)) map = l.Text.Trim();
+        }
+        if (map.Length > 0) LastMap = map;
+        if (pos.Ok) { pos = pos with { Map = map.Length > 0 ? map : LastMap }; LastPos = pos; }
+        return pos;
+    }
+
+    /// <summary>The map name only (Ok false when nothing is readable).</summary>
+    public static async Task<string> MapAsync() { await PositionAsync(); return LastMap; }
+
+    /// <summary>
+    /// The boss HP bar, read in the box the member placed over it (Bubbles, + Boss HP bar): the share of the bar that is filled red,
+    /// 0..1, or -1 when no bar is there (no boss targeted). Returns -2 when there is no box or no picture.
+    /// </summary>
+    public static double BossHp(BubbleLayout layout)
+    {
+        var box = layout.Find(BubbleKind.BossBar);
+        var f = Capture.Snap(C);
+        if (box == null || f == null) { LastHp = -1; return -2; }
+        var (cx, cy) = layout.At(box, f.W, f.H);
+        var (bw, bh) = layout.SizeAt(box, f.W, f.H);
+        int x0 = (int)(cx - bw / 2), x1 = (int)(cx + bw / 2), y0 = (int)(cy - bh / 2), y1 = (int)(cy + bh / 2);
+        if (x1 - x0 < 8 || y1 - y0 < 2) return -2;
+        // each column counts as "full" when most of its pixels are a strong red (the HP colour)
+        int cols = 0, full = 0, last = -1;
+        for (int x = x0; x < x1; x++)
+        {
+            int red = 0, n = 0;
+            for (int y = y0; y < y1; y++)
+            {
+                var (r, g, b) = f.Rgb(x, y);
+                n++;
+                if (r > 120 && r > g * 1.8 && r > b * 1.8) red++;
+            }
+            cols++;
+            if (red * 2 >= n) { full++; last = x; }
+        }
+        double hp = cols == 0 || full < Math.Max(2, cols / 100) ? -1 : (last - x0 + 1) / (double)cols;
+        LastHp = hp;
+        return hp;
+    }
+
+    /// <summary>Lines of text in a part of the screen given as fractions of its size (the teleport list, buttons ...).</summary>
+    public static async Task<List<TextLine>> TextAsync(double fx, double fy, double fw, double fh, int scale = 1)
+    {
+        var f = Capture.Snap(C);
+        if (f == null) return new();
+        return await Ocr.ReadAsync(f, (int)(f.W * fx), (int)(f.H * fy), (int)(f.W * fw), (int)(f.H * fh), scale);
+    }
+}

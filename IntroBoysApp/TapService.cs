@@ -219,6 +219,20 @@ public class TapService : AccessibilityService
         return true;
     }
 
+    /// <summary>Sends a gesture built by the caller (the move pad's held stick, Nav.cs). False when it was cancelled or refused.</summary>
+    public Task<bool> DispatchAsync(Func<GestureDescription> build, long ms)
+    {
+        License.Require();
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Main.Post(() =>
+        {
+            try { if (!DispatchGesture(build(), new Result(done), null)) done.TrySetResult(false); }
+            catch { done.TrySetResult(false); }
+        });
+        _ = Task.Delay((int)ms + 2000).ContinueWith(_ => done.TrySetResult(false));
+        return done.Task;
+    }
+
     sealed class Result : GestureResultCallback
     {
         readonly TaskCompletionSource<bool> done;

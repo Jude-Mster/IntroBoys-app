@@ -73,6 +73,7 @@ sealed class Overlay
     Button? screenBtn;
     readonly Dictionary<RunMode, Button> modeBtns = new();
     bool ticking;
+    volatile bool reading;
 
     public void ShowControl()
     {
@@ -183,6 +184,16 @@ sealed class Overlay
         void Next()
         {
             if (control == null || panelBox == null || panelBox.Visibility != ViewStates.Visible) { ticking = false; return; }
+            // not running: keep the position and boss bar readings live, so the member sees the reading works
+            if (!Runner.Running && Capture.On && !reading)
+            {
+                reading = true;
+                _ = Task.Run(async () =>
+                {
+                    try { await Screen.PositionAsync(); Screen.BossHp(BubbleLayout.Load()); }
+                    finally { reading = false; }
+                });
+            }
             Refresh();
             svc.Main.PostDelayed(Next, 1000);
         }
@@ -239,7 +250,9 @@ sealed class Overlay
     void StartRun()
     {
         string? why = Runner.Start();
-        if (why != null && detail != null) { detail.Text = why; detail.SetTextColor(Ui.Gold); }
+        if (why != null && detail != null) { detail.Text = why; detail.SetTextColor(Ui.Gold); return; }
+        // a run needs the whole screen: fold the panel away (the S stays; tap it to look)
+        if (Runner.RunningMode != RunMode.Attack && panelBox != null) panelBox.Visibility = ViewStates.Gone;
     }
 
     void OnRunnerChanged() => svc.Main.Post(Refresh);
@@ -252,7 +265,7 @@ sealed class Overlay
         detail.SetTextColor(Ui.Muted);
         if (Runner.Running)
         {
-            title.Text = "AUTO ATTACK · LIVE";
+            title.Text = Runner.RunningMode == RunMode.Attack ? "AUTO ATTACK · LIVE" : (Runner.Phase.Length > 0 ? Runner.Phase.ToUpperInvariant() : "RUNNING");
             title.SetTextColor(Ui.Green);
             startStop.Text = "Stop";
             detail.Text = Runner.StatusLine();
@@ -276,10 +289,16 @@ sealed class Overlay
         if (runsText != null) runsText.Text = "Runs in a row: " + (Runner.Runs == 0 ? "0 (until stopped)" : Runner.Runs.ToString());
         if (totals != null) totals.Text = "Done on this phone: Labyrinth " + Runner.TotalLabyrinth + " · Den " + Runner.TotalDen;
         if (logText != null) logText.Text = string.Join("\n", AppLog.Last(4));
-        hpBar?.Set(-1);
+        double hp = Screen.LastHp;
+        hpBar?.Set(hp);
+        if (hpText != null) hpText.Text = "boss HP " + (hp >= 0 ? Math.Round(hp * 100) + "%" : "–");
+        if (posText != null) posText.Text = "position " + Screen.LastPos;
         if (screenNote != null)
-            screenNote.Text = !Capture.On ? "Screen sharing is off: tap Screen (live view on the website, and screen reading)."
-                            : "Boss HP and position reading for the phone game: next update.";
+        {
+            screenNote.Text = !Capture.On ? "Screen sharing is off: tap Screen (live view on the website, and reading the screen)."
+                            : !layout.Bubbles.Any(b => b.Kind == BubbleKind.BossBar) ? "Place the Boss HP bar box (Bubbles) for Labyrinth and Den runs." : "";
+            screenNote.Visibility = screenNote.Text!.Length > 0 ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (screenBtn != null) screenBtn.Text = Capture.On ? "Screen ✓" : "Screen";
     }
 

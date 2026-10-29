@@ -24,7 +24,8 @@ sealed class Editor
     readonly int[] loc = new int[2];
     ItemView? selected;
 
-    readonly LinearLayout panel, body, selBox, modesRow, everyRow, camBox, padBox, stepsList, tapButtons;
+    readonly LinearLayout panel, body, selBox, modesRow, everyRow, camBox, padBox, barBox, stepsList, tapButtons;
+    readonly TextView barRead;
     readonly TextView selTitle, everyText, count;
     readonly Dictionary<PressMode, Button> modeButtons = new();
     bool panelRight;
@@ -58,7 +59,7 @@ sealed class Editor
         body = Ui.Column(c, 8);
         body.AddView(Ui.Text(c, "Add a bubble and drag it onto the game button (the dot in the middle is where it taps). Tap one to change or remove it. Fold the panel (–) to move bubbles under it.", 11, Ui.Muted));
         var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.Potion, BubbleKind.AutoLoot,
-                            BubbleKind.Teleport, BubbleKind.Return, BubbleKind.Other, BubbleKind.Camera, BubbleKind.MovePad };
+                            BubbleKind.Teleport, BubbleKind.Return, BubbleKind.Other, BubbleKind.Camera, BubbleKind.MovePad, BubbleKind.BossBar };
         LinearLayout? row = null;
         for (int i = 0; i < kinds.Length; i++)
         {
@@ -113,6 +114,14 @@ sealed class Editor
         selBox.AddView(camBox, Ui.Wide());
 
         // move pad
+        barBox = Ui.Column(c, 6);
+        barBox.AddView(Ui.Text(c, "During a boss fight, put this thin box exactly over the boss's red HP bar (from where the bar starts to where it ends when full). " +
+                                  "The Assistant reads how much red is left: it knows when the boss shows up, how its HP goes, and when it is dead.", 11, Ui.Muted));
+        barRead = Ui.Text(c, "", 12, Color.White, true);
+        barBox.AddView(barRead);
+        barBox.AddView(Ui.Button(c, "Read the bar now", false, ReadBar, 12), Ui.Wide());
+        selBox.AddView(barBox, Ui.Wide());
+
         padBox = Ui.Column(c, 6);
         padBox.AddView(Ui.Text(c, "Put the middle on the game's move pad, and drag the ring's edge to how far the stick goes. Labyrinth and Den runs walk with it.", 11, Ui.Muted));
         padBox.AddView(Ui.Button(c, "Test: walk forward 1 s", false, () => _ = Test(TestPad), 12), Ui.Wide());
@@ -190,6 +199,12 @@ sealed class Editor
             b = Bubble.New(k, loc[0] + w * 0.6f, loc[1] + h * 0.42f);
             b.W = w * 0.42f; b.H = h * 0.5f;
         }
+        else if (k == BubbleKind.BossBar)
+        {
+            if (layout.Find(k) is { } had) { Select(views.FirstOrDefault(v => v.Bubble == had)); return; }      // one boss HP bar
+            b = Bubble.New(k, loc[0] + w * 0.5f, loc[1] + h * 0.12f);
+            b.W = w * 0.22f; b.H = Ui.Dp(c, 14);
+        }
         else if (k == BubbleKind.MovePad)
         {
             if (layout.Find(k) is { } had) { Select(views.FirstOrDefault(v => v.Bubble == had)); return; }      // one move pad
@@ -234,10 +249,11 @@ sealed class Editor
                     float dx = ev.RawX - downX, dy = ev.RawY - downY;
                     if (!moved && Math.Abs(dx) < slop && Math.Abs(dy) < slop) break;
                     moved = true;
-                    if (resizing && b.Kind == BubbleKind.Camera)
+                    if (resizing && b.IsBox)
                     {
                         // the top-left corner stays put; the bottom-right follows the finger
-                        b.W = Math.Max(Ui.Dp(c, 80), startW + dx); b.H = Math.Max(Ui.Dp(c, 60), startH + dy);
+                        float minW = b.Kind == BubbleKind.BossBar ? Ui.Dp(c, 30) : Ui.Dp(c, 80), minH = b.Kind == BubbleKind.BossBar ? Ui.Dp(c, 4) : Ui.Dp(c, 60);
+                        b.W = Math.Max(minW, startW + dx); b.H = Math.Max(minH, startH + dy);
                         b.X = startX - startW / 2 + b.W / 2; b.Y = startY - startH / 2 + b.H / 2;
                     }
                     else if (resizing) b.W = Math.Max(Ui.Dp(c, 24), startW + (dx + dy) / 2);
@@ -256,7 +272,7 @@ sealed class Editor
         Root.GetLocationOnScreen(loc);
         var b = v.Bubble;
         float w = size, h = size;
-        if (b.Kind == BubbleKind.Camera) { w = b.W; h = b.H; }
+        if (b.IsBox) { w = b.W; h = b.H; }
         else if (b.Kind == BubbleKind.MovePad) { w = h = b.W * 2 + Ui.Dp(c, 16); }
         var lp = v.LayoutParameters;
         if (lp != null && (lp.Width != (int)w || lp.Height != (int)h)) { lp.Width = (int)w; lp.Height = (int)h; v.LayoutParameters = lp; }
@@ -284,6 +300,7 @@ sealed class Editor
         tapButtons.Visibility = area ? ViewStates.Gone : ViewStates.Visible;
         camBox.Visibility = b.Kind == BubbleKind.Camera ? ViewStates.Visible : ViewStates.Gone;
         padBox.Visibility = b.Kind == BubbleKind.MovePad ? ViewStates.Visible : ViewStates.Gone;
+        barBox.Visibility = b.Kind == BubbleKind.BossBar ? ViewStates.Visible : ViewStates.Gone;
         foreach (var (m, btn) in modeButtons)
             btn.Background = m == b.Mode ? Ui.Round(c, Ui.Red, 9) : Ui.Round(c, Color.Transparent, 9, Color.ParseColor("#3A3A40"));
         everyRow.Visibility = !area && b.Mode == PressMode.Repeat ? ViewStates.Visible : ViewStates.Gone;
@@ -408,6 +425,23 @@ sealed class Editor
         return ok ? "Walked forward. If not, move the pad's middle onto the game's stick." : "The drag did not go through.";
     }
 
+    /// <summary>Reads the boss HP bar in the box as it is placed now (needs screen sharing).</summary>
+    void ReadBar()
+    {
+        if (!Capture.On) { barRead.Text = "Screen sharing is off: tap Screen on the floating panel first."; return; }
+        var (w, h) = svc.ScreenSize();
+        var copy = layout.Copy();
+        copy.ScreenW = w; copy.ScreenH = h;
+        // the editor's own dim colour is drawn over the game: hide it for the reading
+        Root.Visibility = ViewStates.Invisible;
+        Root.PostDelayed(() =>
+        {
+            double hp = Screen.BossHp(copy);
+            Root.Visibility = ViewStates.Visible;
+            barRead.Text = hp >= 0 ? "Boss HP: " + Math.Round(hp * 100) + "%" : hp == -1 ? "No red bar in the box." : "Place the box first.";
+        }, 350);
+    }
+
     void UpdateCount()
     {
         count.SetTextColor(Ui.Soft);
@@ -489,9 +523,12 @@ sealed class AreaView : ItemView
 
     float KnobR => Ui.Dp(Context!, 11);
 
-    (float x, float y) KnobAt() => Bubble.Kind == BubbleKind.Camera
+    (float x, float y) KnobAt() => Thin ? (Width - KnobR * 0.6f, Height / 2f) : Bubble.IsBox
         ? (Width - KnobR - 2, Height - KnobR - 2)
         : (Width / 2f + Bubble.W * 0.7071f, Height / 2f + Bubble.W * 0.7071f);
+
+    // the boss HP bar box is thin: its resize dot sits just below its right end
+    bool Thin => Bubble.Kind == BubbleKind.BossBar;
 
     /// <summary>True when a touch at (x, y) in the view is on the resize dot.</summary>
     public bool OnHandle(float x, float y)
@@ -507,12 +544,12 @@ sealed class AreaView : ItemView
         fill.Color = Color.Argb(40, col.R, col.G, col.B);
         edge.Color = Selected ? Ui.Gold : Color.Argb(230, col.R, col.G, col.B);
         float cx = Width / 2f, cy = Height / 2f;
-        if (Bubble.Kind == BubbleKind.Camera)
+        if (Bubble.IsBox)
         {
-            float r = Ui.Dp(Context!, 12), i = edge.StrokeWidth;
+            float r = Thin ? 2 : Ui.Dp(Context!, 12), i = edge.StrokeWidth;
             canvas.DrawRoundRect(i, i, Width - i, Height - i, r, r, fill);
             canvas.DrawRoundRect(i, i, Width - i, Height - i, r, r, edge);
-            canvas.DrawText("CAMERA AREA", cx, cy, text);
+            if (!Thin) canvas.DrawText("CAMERA AREA", cx, cy, text);
         }
         else
         {
