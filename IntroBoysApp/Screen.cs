@@ -148,9 +148,10 @@ static class Screen
             {
                 var (r, g, b) = f.Rgb(x0 + i, y);
                 n++;
-                if (r >= 90 && r >= g * 1.5 && r >= b * 1.5) hit++;
+                // 1.3.8: a darker / less saturated red counts too (another phone's screen and the game's effects over the bar)
+                if (r >= 75 && r >= g * 1.35 && r >= b * 1.35 && r - Math.Max(g, b) >= 35) hit++;
             }
-            red[i] = hit * 2 >= n;
+            red[i] = hit * 3 >= n;
         }
         // the red has to start near the left end of the bar ...
         int start = -1;

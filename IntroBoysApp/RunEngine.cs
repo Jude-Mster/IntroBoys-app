@@ -66,6 +66,7 @@ static class RunEngine
     {
         var nav = new Nav(svc, layout);
         bool den = mode == RunMode.Den;
+        AppLog.Add("phone: " + AppLog.Device());
         countdownDone = false;
         if (!Capture.CanSee) throw new Exception("this phone (Android 10) needs Live record on to read the screen: tap Live record on the panel");
         int kicks = 0;
@@ -80,7 +81,13 @@ static class RunEngine
             int first = 0;
             if (!inside)
             {
-                if (!await TeleportAsync(svc, layout, nav, den, ct)) throw new Exception("the teleport didn't work (see the log)");
+                // 1.3.8: a second try (the list opened on another page, or a word was misread on a smaller screen)
+                if (!await TeleportAsync(svc, layout, nav, den, ct))
+                {
+                    AppLog.Add("teleport: trying once more");
+                    await Task.Delay(2000, ct);
+                    if (!await TeleportAsync(svc, layout, nav, den, ct)) throw new Exception("the teleport didn't work (see the log)");
+                }
                 await ArriveAsync(svc, layout, nav, den, ct);
             }
             else if (!den && here.Dist(LabyEntrance.x, LabyEntrance.y) < 450)
@@ -133,13 +140,14 @@ static class RunEngine
     static async Task<bool> TeleportAsync(TapService svc, BubbleLayout layout, Nav nav, bool den, CancellationToken ct)
     {
         Runner.SetPhase("teleporting to " + (den ? "the Den" : "the Labyrinth"));
-        string[] names = den ? new[] { "Rebirth", "Ultimate Den", "Den of" } : new[] { "Labyrinth" };
+        string[] names = den ? new[] { "Rebirth", "Ultimate Den", "Den of", "Rebir" } : new[] { "Labyrinth", "Labyr", "rinth (Ad" };
         await Press(svc, layout, BubbleKind.Teleport);
         await Task.Delay(1500, ct);
         for (int page = 0; page < 5; page++)
         {
             // the list is in the middle of the screen
-            var lines = await Screen.TextAsync(0.30, 0.08, 0.40, 0.86);
+            // 1.3.8: read at twice the size on smaller screens (the list's letters are small there)
+            var lines = await Screen.TextAsync(0.30, 0.08, 0.40, 0.86, Math.Min(svc.ScreenSize().w, svc.ScreenSize().h) < 1000 ? 2 : 1);
             var hit = lines.FirstOrDefault(l => names.Any(n => l.Text.Contains(n, StringComparison.OrdinalIgnoreCase)));
             if (hit.Text != null && hit.Text.Length > 0)
             {
@@ -304,10 +312,13 @@ static class RunEngine
         double buffEvery = buffs.Count == 0 ? double.MaxValue : Math.Max(20, buffs.Min(b => b.Mode == PressMode.Repeat ? b.Every : 120));
         DateTime NextBuff() => buffs.Count == 0 ? DateTime.MaxValue : lastBuff == DateTime.MinValue ? DateTime.UtcNow.AddSeconds(buffEvery) : lastBuff.AddSeconds(buffEvery);
         var nextBuff = NextBuff();
+        // 1.3.8: what was seen of the bar is kept for the whole fight (it was forgotten after every check, so on a phone where the red is
+        // hard to read the fight stopped every 5 s to look again - and one missed name made the run leave a living boss)
+        double lo = 1, hi = 0;
+        int confirmMisses = 0;
         while (true)
         {
             Runner.ShowPhase("fighting " + name);
-            double lo = 1, hi = 0;
             DateTime? goneSince = null;
             bool dead = false, lastThere = true;
             using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -321,7 +332,7 @@ static class RunEngine
                     if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); } }
                     else goneSince ??= DateTime.UtcNow;
                     double secs = (DateTime.UtcNow - start).TotalSeconds;
-                    double need = lo <= 0.15 && hi >= 0.30 ? 1.5 : 3.0;
+                    double need = lo <= 0.15 && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
                     if (secs < 8) need = Math.Max(need, 5);
                     if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= need) { dead = true; return; }
                     if (secs > FightTimeout) { AppLog.Add($"{name}: fight took too long, going on"); dead = true; return; }
@@ -338,13 +349,22 @@ static class RunEngine
                 nextBuff = NextBuff();
                 continue;
             }
-            // make sure: target once more; a boss that is still there shows its bar again
+            if ((DateTime.UtcNow - start).TotalSeconds >= FightTimeout) break;
+            // make sure: target once more and look three times (about 2 s); a boss that is still there shows its bar or its name again.
+            // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss
             await Press(svc, layout, BubbleKind.Target);
-            await Task.Delay(1200, ct);
-            var (hp2, there2) = await Screen.BossAsync(layout, true);
-            if (there2 && (DateTime.UtcNow - start).TotalSeconds < FightTimeout)
+            await Task.Delay(900, ct);
+            bool alive = false; double hp2 = -1;
+            for (int k = 0; k < 3 && !alive; k++)
             {
-                AppLog.Add($"{name}: still there ({(hp2 >= 0 ? Math.Round(hp2 * 100) + "%" : "no red")}), attacking on");
+                if (k > 0) await Task.Delay(500, ct);
+                var (h2, t2) = await Screen.BossAsync(layout, true);
+                if (h2 > 0 || t2) { alive = true; hp2 = h2; }
+            }
+            if (alive)
+            {
+                if (++confirmMisses <= 3 || confirmMisses % 10 == 0)
+                    AppLog.Add($"{name}: still there ({(hp2 > 0 ? Math.Round(hp2 * 100) + "%" : "no red")}), attacking on");
                 continue;
             }
             break;

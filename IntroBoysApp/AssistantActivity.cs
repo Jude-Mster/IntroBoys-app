@@ -315,7 +315,20 @@ public class AssistantActivity : Activity
         var i = new Intent(Intent.ActionSend);
         i.SetType("text/plain");
         i.PutExtra(Intent.ExtraSubject, "IntroBoys Assistant log " + LicenseConfig.AppVersion);
-        i.PutExtra(Intent.ExtraText, "IntroBoys Assistant " + LicenseConfig.AppVersion + "\n" + AppLog.All());
+        // 1.3.8: the whole log goes as a file (some apps cut long text short); the text is only the last lines
+        var file = AppLog.AsFile(LicenseConfig.AppVersion);
+        Uri? uri = null;
+        if (file != null)
+        {
+            try { uri = AndroidX.Core.Content.FileProvider.GetUriForFile(this, LogProvider.Authority, file); } catch { uri = null; }
+        }
+        if (uri != null)
+        {
+            i.PutExtra(Intent.ExtraStream, uri);
+            i.AddFlags(ActivityFlags.GrantReadUriPermission);
+            i.PutExtra(Intent.ExtraText, "IntroBoys Assistant " + LicenseConfig.AppVersion + " log (the whole log is in the attached file)\nphone: " + AppLog.Device() + "\n" + string.Join("\n", AppLog.Last(25)));
+        }
+        else i.PutExtra(Intent.ExtraText, "IntroBoys Assistant " + LicenseConfig.AppVersion + "\nphone: " + AppLog.Device() + "\n" + AppLog.All());
         Open(Intent.CreateChooser(i, "Share the log")!);
     }
 

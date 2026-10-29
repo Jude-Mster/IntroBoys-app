@@ -59,6 +59,32 @@ static class AppLog
         lock (gate) { LoadLocked(); return lines.Skip(Math.Max(0, lines.Count - n)).ToArray(); }
     }
 
+    /// <summary>1.3.8: the phone, its Android and its screen (for logs from different phones).</summary>
+    public static string Device()
+    {
+        try
+        {
+            var dm = Android.App.Application.Context.Resources!.DisplayMetrics!;
+            var (w, h) = TapService.Instance?.ScreenSize() ?? (dm.WidthPixels, dm.HeightPixels);
+            return $"{Android.OS.Build.Manufacturer} {Android.OS.Build.Model}, Android {Android.OS.Build.VERSION.Release} (SDK {(int)Android.OS.Build.VERSION.SdkInt}), screen {w} x {h}, {dm.DensityDpi} dpi";
+        }
+        catch { return "unknown"; }
+    }
+
+    /// <summary>1.3.8: the whole log as a file (the shared text was cut short by some apps), with the phone at the top. Null when it can't be written.</summary>
+    public static Java.IO.File? AsFile(string version)
+    {
+        try
+        {
+            var dir = new Java.IO.File(Android.App.Application.Context.CacheDir, "logs");
+            dir.Mkdirs();
+            var f = new Java.IO.File(dir, "introboys-log.txt");
+            File.WriteAllText(f.AbsolutePath, "IntroBoys Assistant " + version + "\nphone: " + Device() + "\n" + All() + "\n");
+            return f;
+        }
+        catch { return null; }
+    }
+
     static int hooked;
     /// <summary>Writes any crash into the log (with where it happened), so it can be shared and fixed.</summary>
     public static void CatchCrashes()

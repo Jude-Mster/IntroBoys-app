@@ -226,8 +226,15 @@ static class Runner
                     _ => long.MaxValue                                           // Once
                 };
 
-                if (ok) { failed = 0; Presses++; if (Presses % 5 == 0) Raise(); }
-                else if (++failed >= 12) return "Stopped: the taps keep being cancelled (is the screen off, or is something on top of the game?).";
+                if (ok) { if (failed >= 12) AppLog.Add("taps: going through again"); failed = 0; Presses++; if (Presses % 5 == 0) Raise(); }
+                else
+                {
+                    // 1.3.8: a cancelled tap (a finger on the screen, a game pop-up, the phone's game tools) no longer stops the run at once:
+                    // after 12 in a row it says so and pauses a moment, and only stops after about a minute of nothing going through
+                    failed++;
+                    if (failed == 12) AppLog.Add("taps: Android keeps cancelling them (a finger on the screen, a pop-up over the game, or the phone's game tools blocking gestures) - trying on");
+                    if (failed >= 12) { if (failed >= 80) return "Stopped: the taps keep being cancelled for a minute (is the screen off, or is something on top of the game?)."; await Task.Delay(600, ct); }
+                }
                 await Task.Delay(GapMs, ct);
             }
         }
