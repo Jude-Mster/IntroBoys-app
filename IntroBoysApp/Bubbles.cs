@@ -8,7 +8,7 @@ namespace IntroBoys.App;
 public enum PressMode { Hold, Repeat, Once, Off }
 
 /// <summary>What a bubble sits on in the game.</summary>
-public enum BubbleKind { Attack, Target, Skill, Buff, Potion, AutoLoot, Other, Teleport, Return, Camera, MovePad, BossBar }
+public enum BubbleKind { Attack, Target, Skill, Buff, Potion, AutoLoot, Other, Teleport, Return, Camera, MovePad, BossBar, AutoHunt }
 
 /// <summary>One step of the camera fix after a teleport: drag the view one way, or zoom.</summary>
 public enum CamOp { Left, Right, Up, Down, ZoomIn, ZoomOut }
@@ -51,6 +51,7 @@ public sealed class Bubble
         BubbleKind.Camera => "CAM",
         BubbleKind.MovePad => "PAD",
         BubbleKind.BossBar => "BAR",
+        BubbleKind.AutoHunt => "HUNT",
         _ => "BTN"
     };
 
@@ -67,6 +68,7 @@ public sealed class Bubble
         BubbleKind.Camera => "Camera area",
         BubbleKind.MovePad => "Move pad",
         BubbleKind.BossBar => "Boss HP bar",
+        BubbleKind.AutoHunt => "Auto hunt",
         _ => "Other"
     };
 
@@ -84,6 +86,7 @@ public sealed class Bubble
         BubbleKind.Camera => "#78BEFF",
         BubbleKind.MovePad => "#5EE08F",
         BubbleKind.BossBar => "#FF5A5F",
+        BubbleKind.AutoHunt => "#00A884",
         _ => "#5C6BC0"
     };
 
@@ -101,6 +104,8 @@ public sealed class Bubble
         BubbleKind.Camera => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
         BubbleKind.MovePad => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
         BubbleKind.BossBar => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Off, Every = 5 },
+        // the game's auto-hunt switch: on when a fight starts, off again after the kill
+        BubbleKind.AutoHunt => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Once, Every = 5 },
         _ => new Bubble { Kind = k, X = x, Y = y, Mode = PressMode.Repeat, Every = 5 }
     };
 

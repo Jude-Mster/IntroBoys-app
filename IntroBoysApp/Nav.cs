@@ -4,17 +4,22 @@ using Android.Content;
 namespace IntroBoys.App;
 
 /// <summary>
-/// The move pad, pressed and HELD like a thumb (the way a WASD key is held on PC): one long touch that goes to the edge of the stick
-/// and stays there, so the character runs without stopping. Only a real change of direction (or a hold running out) starts a new
-/// touch, which takes a few milliseconds.
+/// The move pad, held and dragged like a thumb (the way a WASD key is held on PC): the finger goes down in the middle, drags out to
+/// the edge and STAYS DOWN; to change direction it drags round the edge to the new way, never lifting. A small pump keeps the touch
+/// going in short continued pieces toward whatever way the walk wants right now, so reading the screen never makes it stop.
 /// </summary>
 sealed class Stick
 {
     readonly TapService svc;
     readonly float cx, cy, reach;
-    double heldAngle = double.NaN;
-    long heldSince, heldUntil;
-    const long HoldMs = 6000;            // one touch lasts this long; it is renewed before it runs out
+    volatile float wantX, wantY;
+    volatile bool want;
+    float atX, atY;
+    GestureDescription.StrokeDescription? held;
+    CancellationTokenSource? pumping;
+    Task? pump;
+    const long Piece = 220;          // ms per continued piece of the touch
+    bool wiggle;
 
     public Stick(TapService svc, BubbleLayout layout)
     {
@@ -26,53 +31,88 @@ sealed class Stick
         if (reach < 20) reach = 120;
     }
 
-    static long Now => System.Environment.TickCount64;
-
-    GestureDescription Build(double angle, long ms)
+    (float x, float y) Edge(double angle)
     {
         double a = angle * Math.PI / 180;
-        float tx = cx + (float)(reach * Math.Cos(a)), ty = cy - (float)(reach * Math.Sin(a));
-        var path = new Android.Graphics.Path();
-        path.MoveTo(cx, cy);
-        path.LineTo(tx, ty);
-        // a stroke moves along its path for its whole time: after reaching the edge, a long run of 1-pixel wiggles keeps the thumb
-        // at the edge for nearly all of it
-        // (2-pixel wiggles, about 5000 px of them, so the way out to the edge takes only ~3% of the touch)
-        int wiggles = 2500;
-        for (int i = 0; i < wiggles; i++) path.LineTo(tx + (i % 2 == 0 ? 2 : 0), ty);
-        return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms)))!.Build()!;
+        return (cx + (float)(reach * Math.Cos(a)), cy - (float)(reach * Math.Sin(a)));
     }
 
     /// <summary>Keeps the stick pushed toward <paramref name="angle"/> (degrees: 0 = right, 90 = up on the screen). Returns at once.</summary>
     public void Hold(double angle)
     {
-        long now = Now;
-        double diff = double.IsNaN(heldAngle) ? 999 : Math.Abs(((angle - heldAngle) % 360 + 540) % 360 - 180);
-        if (diff < 10 && now < heldUntil - 800) return;       // same way and not about to run out: keep the thumb where it is
-        heldAngle = angle;
-        heldSince = now;
-        heldUntil = now + HoldMs;
-        _ = svc.DispatchAsync(() => Build(angle, HoldMs), HoldMs);
+        (wantX, wantY) = Edge(angle);
+        want = true;
+        if (pump == null || pump.IsCompleted)
+        {
+            pumping = new CancellationTokenSource();
+            var ct = pumping.Token;
+            pump = Task.Run(() => Pump(ct));
+        }
     }
 
-    /// <summary>A push of <paramref name="ms"/> milliseconds (short steps), waited for.</summary>
+    async Task Pump(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            float tx = wantX, ty = wantY;
+            var prev = held;
+            float fx = prev == null ? cx : atX, fy = prev == null ? cy : atY;
+            // the same spot again: a 1-pixel wiggle (a piece must move a little)
+            if (Math.Abs(tx - fx) < 1 && Math.Abs(ty - fy) < 1) { wiggle = !wiggle; tx = fx + (wiggle ? 1 : -1); }
+            GestureDescription.StrokeDescription? stroke = null;
+            bool ok = await svc.DispatchAsync(() =>
+            {
+                var path = new Android.Graphics.Path();
+                path.MoveTo(fx, fy);
+                path.LineTo(tx, ty);
+                stroke = prev == null
+                    ? new GestureDescription.StrokeDescription(path, 0, Piece, true)
+                    : prev.ContinueStroke(path, 0, Piece, true);
+                return new GestureDescription.Builder().AddStroke(stroke!)!.Build()!;
+            }, Piece);
+            if (ok) { held = stroke; atX = tx; atY = ty; }
+            else { held = null; try { await Task.Delay(40, ct); } catch { } }      // cut off (a tap elsewhere): a new touch next
+        }
+    }
+
+    async Task StopPump()
+    {
+        pumping?.Cancel();
+        if (pump != null) { try { await pump; } catch { } }
+        pump = null;
+    }
+
+    /// <summary>A push of <paramref name="ms"/> milliseconds and let go (short steps), waited for.</summary>
     public async Task<bool> PushAsync(double angle, long ms)
     {
-        heldAngle = double.NaN;
-        return await svc.DispatchAsync(() => Build(angle, ms), ms);
-    }
-
-    /// <summary>Lets go of the stick (a tiny touch on its middle ends the held one).</summary>
-    public async Task ReleaseAsync()
-    {
-        if (double.IsNaN(heldAngle)) return;
-        heldAngle = double.NaN;
-        await svc.DispatchAsync(() =>
+        await ReleaseAsync();
+        var (tx, ty) = Edge(angle);
+        return await svc.DispatchAsync(() =>
         {
             var path = new Android.Graphics.Path();
             path.MoveTo(cx, cy);
-            return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, 10))!.Build()!;
-        }, 10);
+            path.LineTo(tx, ty);
+            for (int i = 0; i < 300; i++) path.LineTo(tx + (i % 2 == 0 ? 2 : 0), ty);       // reach the edge fast, then stay
+            return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms)))!.Build()!;
+        }, ms);
+    }
+
+    /// <summary>Lets go of the stick: drags back to the middle and lifts.</summary>
+    public async Task ReleaseAsync()
+    {
+        await StopPump();
+        want = false;
+        var prev = held;
+        held = null;
+        if (prev == null) return;
+        float x = atX, y = atY;
+        await svc.DispatchAsync(() =>
+        {
+            var path = new Android.Graphics.Path();
+            path.MoveTo(x, y);
+            path.LineTo(cx, cy);
+            return new GestureDescription.Builder().AddStroke(prev.ContinueStroke(path, 0, 60, false)!)!.Build()!;
+        }, 60);
     }
 }
 

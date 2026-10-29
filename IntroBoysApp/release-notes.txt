@@ -1,1 +1,1 @@
-Runs straight again: the walk only steers on new readings of the position. No more false 'kicked out' or 'still fighting'.
+Move pad held and dragged without lifting. Loot only after a kill (every 400 ms). Auto hunt bubble. No HP presses. No camera test after the teleport. Better HP bar reading.

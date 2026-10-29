@@ -58,7 +58,8 @@ sealed class Editor
 
         body = Ui.Column(c, 8);
         body.AddView(Ui.Text(c, "Add a bubble and drag it onto the game button (the dot in the middle is where it taps). Tap one to change or remove it. Fold the panel (–) to move bubbles under it.", 11, Ui.Muted));
-        var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.Potion, BubbleKind.AutoLoot,
+        // (no Potion: the game drinks HP by itself)
+        var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.AutoHunt, BubbleKind.AutoLoot,
                             BubbleKind.Teleport, BubbleKind.Return, BubbleKind.Other, BubbleKind.Camera, BubbleKind.MovePad, BubbleKind.BossBar };
         LinearLayout? row = null;
         for (int i = 0; i < kinds.Length; i++)

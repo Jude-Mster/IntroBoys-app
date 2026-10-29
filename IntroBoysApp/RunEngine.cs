@@ -172,7 +172,6 @@ static class RunEngine
         Runner.SetPhase("finding the gate");
         await Task.Delay(1200, ct);
         await nav.ZoomOutAsync(ct);
-        if (layout.CamFix.Count > 0) await svc.CameraFixAsync(layout, ct);
         var p = await nav.ReadAsync(ct);
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
@@ -263,7 +262,10 @@ static class RunEngine
         var start = DateTime.UtcNow;
         var fightLayout = layout.Copy();
         // only the fight buttons (no teleport / return / target spam in a fight: target is pressed when it is needed)
-        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return or BubbleKind.Target or BubbleKind.Buff);
+        fightLayout.Bubbles.RemoveAll(b => b.Kind is BubbleKind.Teleport or BubbleKind.Return or BubbleKind.Target or BubbleKind.Buff
+                                                or BubbleKind.AutoLoot or BubbleKind.Potion or BubbleKind.AutoHunt);
+        bool hunt = layout.Find(BubbleKind.AutoHunt) != null;
+        if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("auto hunt: on"); }
         // buffs don't work while attacking: they are done apart, away from the boss, when their time comes round
         var buffs = layout.Bubbles.Where(b => b.Kind == BubbleKind.Buff && b.Mode != PressMode.Off).ToList();
         double buffEvery = buffs.Count == 0 ? double.MaxValue : Math.Max(20, buffs.Min(b => b.Mode == PressMode.Repeat ? b.Every : 120));
@@ -314,6 +316,7 @@ static class RunEngine
             }
             break;
         }
+        if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("auto hunt: off"); }
         AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s)");
     }
 
@@ -356,17 +359,12 @@ static class RunEngine
         await Task.Delay(300, ct);
     }
 
-    /// <summary>The game's auto loot picks the drops up (they fall at once): press it and give it a moment.</summary>
+    /// <summary>Loot right after the kill (the drops fall at once): the Auto loot bubble every 400 ms for about 3 seconds.</summary>
     static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct)
     {
         Runner.SetPhase("looting");
-        if (layout.Find(BubbleKind.AutoLoot) != null)
-        {
-            await Press(svc, layout, BubbleKind.AutoLoot);
-            await Task.Delay(1500, ct);
-            await Press(svc, layout, BubbleKind.AutoLoot);
-        }
-        await Task.Delay(2000, ct);
+        await Runner.LootBurstAsync(svc, layout, ct);
+        await Task.Delay(300, ct);
     }
 
     /// <summary>The return scroll after the last boss (and a moment for the town to load).</summary>

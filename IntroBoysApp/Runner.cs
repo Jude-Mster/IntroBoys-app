@@ -135,8 +135,31 @@ static class Runner
     {
         try
         {
-            string? why = await PressUntil(svc, layout, () => false, ct);
-            Stop(why ?? "Done: every bubble was pressed.");
+            // loot only when something died (with the Boss HP bar box placed: a target's red bar went away); no potion (the game does HP)
+            var fight = layout.Copy();
+            bool watchKills = fight.Find(BubbleKind.BossBar) != null && fight.Find(BubbleKind.AutoLoot) != null;
+            fight.Bubbles.RemoveAll(b => b.Kind == BubbleKind.Potion || (watchKills && b.Kind == BubbleKind.AutoLoot));
+            if (!watchKills) { string? w = await PressUntil(svc, fight, () => false, ct); Stop(w ?? "Done: every bubble was pressed."); return; }
+            while (!ct.IsCancellationRequested)
+            {
+                bool died = false; double seen = 0; DateTime? gone = null;
+                using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var watcher = Task.Run(async () =>
+                {
+                    while (!watch.IsCancellationRequested)
+                    {
+                        double hp = await Screen.BossHpAsync(layout);
+                        if (hp > 0) { seen = Math.Max(seen, hp); gone = null; }
+                        else if (seen > 0) { gone ??= DateTime.UtcNow; if ((DateTime.UtcNow - gone.Value).TotalSeconds >= 1.2) { died = true; return; } }
+                        try { await Task.Delay(250, watch.Token); } catch { return; }
+                    }
+                });
+                string? why = await PressUntil(svc, fight, () => died, ct);
+                watch.Cancel();
+                try { await watcher; } catch { }
+                if (why != null) { Stop(why); return; }
+                if (died) { Kills++; AppLog.Add("target died: looting"); await LootBurstAsync(svc, layout, ct); }
+            }
         }
         catch (System.OperationCanceledException) { }
         catch (LicenseException ex) { Stop("Stopped: " + ex.Message); }
@@ -147,9 +170,25 @@ static class Runner
     /// Presses the bubbles (as auto attack does) until <paramref name="done"/> says so. Returns null when done (or every bubble was
     /// pressed once), otherwise why it had to stop.
     /// </summary>
+    /// <summary>Loot after a kill: the Auto loot bubble, every 400 ms, about 3 seconds.</summary>
+    public static async Task LootBurstAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int taps = 8)
+    {
+        var loot = layout.Find(BubbleKind.AutoLoot);
+        if (loot == null) return;
+        var (w, h) = svc.ScreenSize();
+        var (x, y) = layout.At(loot, w, h);
+        for (int i = 0; i < taps; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            await svc.PressAsync(x, y, 60);
+            await Task.Delay(340, ct);
+        }
+    }
+
     public static async Task<string?> PressUntil(TapService svc, BubbleLayout layout, Func<bool> done, CancellationToken ct)
     {
-        var list = layout.Bubbles;
+        // HP is drunk by the game itself: a Potion bubble from an older layout is never pressed
+        var list = layout.Bubbles.Where(b => b.Kind != BubbleKind.Potion).ToList();
         var due = new long[list.Count];
         for (int i = 0; i < list.Count; i++) due[i] = list[i].Mode == PressMode.Off || list[i].IsArea ? long.MaxValue : 0;
         int failed = 0;

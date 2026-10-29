@@ -80,29 +80,65 @@ static class Screen
 
     public static double BossHp(BubbleLayout layout) => Hp(layout, Capture.Snap(C));
 
+    static readonly Queue<(long at, double hp)> recent = new();
+
+    /// <summary>
+    /// 1.3.6: how much of the bar is red. Only the middle rows of the box are looked at (not its edges), a darker red counts too, and
+    /// the red must start at the left end and run on without a real gap (a damage number or a red effect elsewhere in the box is not
+    /// HP). The last three readings within a second are combined (the middle one), so one odd picture doesn't count.
+    /// </summary>
     static double Hp(BubbleLayout layout, Frame? f)
     {
         var box = layout.Find(BubbleKind.BossBar);
         if (box == null || f == null) { LastHp = -1; return -2; }
         var (cx, cy) = layout.At(box, f.W, f.H);
         var (bw, bh) = layout.SizeAt(box, f.W, f.H);
-        int x0 = (int)(cx - bw / 2), x1 = (int)(cx + bw / 2), y0 = (int)(cy - bh / 2), y1 = (int)(cy + bh / 2);
-        if (x1 - x0 < 8 || y1 - y0 < 2) return -2;
-        // each column counts as "full" when most of its pixels are a strong red (the HP colour)
-        int cols = 0, full = 0, last = -1;
-        for (int x = x0; x < x1; x++)
+        int x0 = (int)(cx - bw / 2), x1 = (int)(cx + bw / 2);
+        int yTop = (int)(cy - bh / 2), yBot = (int)(cy + bh / 2);
+        int y0 = yTop + (yBot - yTop) / 4, y1 = Math.Max(y0 + 1, yBot - (yBot - yTop) / 4);
+        int cols = x1 - x0;
+        if (cols < 8) return -2;
+        var red = new bool[cols];
+        for (int i = 0; i < cols; i++)
         {
-            int red = 0, n = 0;
+            int n = 0, hit = 0;
             for (int y = y0; y < y1; y++)
             {
-                var (r, g, b) = f.Rgb(x, y);
+                var (r, g, b) = f.Rgb(x0 + i, y);
                 n++;
-                if (r > 120 && r > g * 1.8 && r > b * 1.8) red++;
+                if (r >= 90 && r >= g * 1.5 && r >= b * 1.5) hit++;
             }
-            cols++;
-            if (red * 2 >= n) { full++; last = x; }
+            red[i] = hit * 2 >= n;
         }
-        double hp = cols == 0 || full < Math.Max(2, cols / 100) ? -1 : (last - x0 + 1) / (double)cols;
+        // the red has to start near the left end of the bar ...
+        int start = -1;
+        for (int i = 0; i < Math.Max(2, cols * 15 / 100); i++) if (red[i]) { start = i; break; }
+        double hp;
+        if (start < 0) hp = -1;
+        else
+        {
+            // ... and runs on to where it stops (gaps up to 3 % of the bar are bridged: a dark line or a number on the bar)
+            int gapMax = Math.Max(2, cols * 3 / 100), gap = 0, end = start;
+            for (int i = start; i < cols; i++)
+            {
+                if (red[i]) { end = i; gap = 0; }
+                else if (++gap > gapMax) break;
+            }
+            hp = (end - 0 + 1) / (double)cols;
+            if (end - start < 2 && hp > 0.05) hp = -1;
+        }
+        // the middle of the last three readings (within a second)
+        long now = System.Environment.TickCount64;
+        lock (recent)
+        {
+            recent.Enqueue((now, hp));
+            while (recent.Count > 3 || (recent.Count > 0 && now - recent.Peek().at > 1000)) recent.Dequeue();
+            if (recent.Count == 3)
+            {
+                var v = recent.Select(x => x.hp).OrderBy(x => x).ToArray();
+                hp = v[1];
+            }
+        }
         LastHp = hp;
         return hp;
     }
