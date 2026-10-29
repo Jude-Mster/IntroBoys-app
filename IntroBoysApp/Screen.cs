@@ -77,7 +77,8 @@ static class Screen
         // is read is as wide as 46 % of the height (was 20 % of the width: on a wider or narrower screen the numbers fell outside it).
         // A place found once is remembered (Prefs "pos_box"); when nothing is found there, the whole top-right quarter is searched.
         var (x, y, w, h) = PosBox(f);
-        var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, 2));
+        // 1.4.3: a small screen (720p: the numbers are ~10 px high) is read at 3 times the size
+        var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, Math.Min(f.W, f.H) <= 800 ? 3 : 2));
         if (!pos.Ok)
         {
             if (++posMisses >= 3 && System.Environment.TickCount64 - lastWide > 4000)

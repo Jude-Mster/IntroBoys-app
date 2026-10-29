@@ -189,16 +189,64 @@ sealed class Nav
         return true;
     }
 
-    /// <summary>A short push of the stick and the same push back: the map direction the push moved the character (null: it didn't move).</summary>
+    /// <summary>
+    /// A short push of the stick and the same push back: the map direction the push moved the character (null: it didn't move).
+    /// 1.4.3: the position is read once it has stopped changing (a slow phone - the 16 FPS cloud phone - showed it mid-step, so the
+    /// direction came out wrong and the camera went round in circles), and a push that moved the character too little to tell a
+    /// direction (under 40) is made longer - up to 1.2 s - and that length is remembered for this screen. A phone whose first push
+    /// already moves far enough keeps the 0.32 s push.
+    /// </summary>
     async Task<double?> StepAsync(double angle, CancellationToken ct)
     {
-        var p0 = await ReadAsync(ct);
-        await stick.PushAsync(angle, 320);
-        await Task.Delay(120, ct);
-        var p1 = await ReadAsync(ct);
-        await stick.PushAsync(angle + 180, 320);
-        if (!p0.Ok || !p1.Ok || p1.Dist(p0.X, p0.Y) < 15) return null;
-        return MapAngle(p1.X - p0.X, p1.Y - p0.Y);
+        var (sw, sh) = svc.ScreenSize();
+        string key = $"nav_step_ms_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}";
+        long ms = Math.Clamp(Prefs.GetInt(key, 320), 320, 1200);
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            var p0 = await SettledAsync(default, ct);
+            await stick.PushAsync(angle, ms);
+            var p1 = await SettledAsync(p0, ct);
+            await stick.PushAsync(angle + 180, ms);
+            if (!p0.Ok || !p1.Ok) return null;
+            double d = p1.Dist(p0.X, p0.Y);
+            if (d >= 40 || (d >= 15 && ms >= 1200))
+            {
+                if (ms != Prefs.GetInt(key, 320)) { Prefs.Edit()!.PutInt(key, (int)ms)!.Apply(); AppLog.Add($"walk: this phone needs {ms} ms pushes to measure the direction"); }
+                await SettledAsync(p1, ct, 900);
+                return MapAngle(p1.X - p0.X, p1.Y - p0.Y);
+            }
+            if (ms >= 1200) break;
+            ms = Math.Min(1200, ms * 2);
+            await SettledAsync(p1, ct, 900);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 1.4.3: the position once it stops changing: fresh pictures until two in a row agree (within 6), or <paramref name="maxMs"/>.
+    /// With <paramref name="from"/> given, a first reading equal to it is only taken after a moment (the screen may not have caught up yet).
+    /// </summary>
+    async Task<Position> SettledAsync(Position from, CancellationToken ct, int maxMs = 1600)
+    {
+        var until = DateTime.UtcNow.AddMilliseconds(maxMs);
+        Position prev = default;
+        bool havePrev = false;
+        var first = DateTime.UtcNow;
+        while (true)
+        {
+            long seenAt = Screen.LastFrameAt;
+            var p = await Screen.PositionAsync();
+            if (Screen.LastFrameAt == seenAt && DateTime.UtcNow < until) { await Task.Delay(60, ct); continue; }
+            if (p.Ok)
+            {
+                last = p;
+                bool sameAsStart = from.Ok && p.Dist(from.X, from.Y) < 6 && (DateTime.UtcNow - first).TotalMilliseconds < 500;
+                if (havePrev && prev.Ok && p.Dist(prev.X, prev.Y) < 6 && !sameAsStart) return p;
+                prev = p; havePrev = true;
+            }
+            if (DateTime.UtcNow >= until) return prev.Ok ? prev : p;
+            await Task.Delay(40, ct);
+        }
     }
 
     /// <summary>
