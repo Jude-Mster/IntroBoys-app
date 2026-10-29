@@ -1,1 +1,1 @@
-After the teleport: zooms out, turns the view to the gate without walking around, waits for the gate to open and goes straight through.
+Labyrinth: waits out the 30 s gate countdown, turns the view to the gate with smooth drags and zooms out. Runs can start before the screen is shared (Android is asked).

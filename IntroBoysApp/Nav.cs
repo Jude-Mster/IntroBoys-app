@@ -156,35 +156,64 @@ sealed class Nav
     {
         var cam = layout.Find(BubbleKind.Camera);
         if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
-        var (w, h) = svc.ScreenSize();
-        var (cx, cy) = layout.At(cam, w, h);
-        var (aw, _) = layout.SizeAt(cam, w, h);
         if (!known && !await CalibrateAsync(ct)) return;
         double perPx = Prefs.GetFloat("cam_deg_per_px", 0);
-        for (int i = 0; i < 6; i++)
+        if (Math.Abs(perPx) < 0.01)
+        {
+            // the first time on this phone: one smooth drag, then measure how far it turned the view
+            double before = Forward;
+            float d = 300;
+            await TurnAsync(d, ct);
+            if (!await CalibrateAsync(ct)) return;
+            double turned = Norm(Forward - before);
+            if (Math.Abs(turned) < 3) { AppLog.Add("camera: the drag didn't turn the view (put the camera area on open ground)"); return; }
+            perPx = turned / d;
+            Prefs.Edit()!.PutFloat("cam_deg_per_px", (float)perPx)!.Apply();
+            AppLog.Add($"camera: a 100 px drag turns {perPx * 100:0}°");
+        }
+        for (int i = 0; i < 3; i++)
         {
             double err = Norm(toward - Forward);
-            if (Math.Abs(err) <= 8) { AppLog.Add($"camera: facing the way ({(int)Forward}°)"); return; }
-            if (Math.Abs(perPx) < 0.01)
+            if (Math.Abs(err) <= 10) { AppLog.Add($"camera: looking at the gate ({(int)Forward}°)"); return; }
+            AppLog.Add($"camera: turning {(int)err}° toward the gate");
+            float px = (float)(err / perPx);
+            await TurnAsync(px, ct);
+            off = Norm(off + px * perPx);                       // where the turn should have put it
+            await Task.Delay(250, ct);
+            if (!await CalibrateAsync(ct)) return;             // and where it really is (a step and back)
+        }
+    }
+
+    /// <summary>
+    /// Turns the view like a thumb would: one smooth, slightly curved drag across the camera area (long turns in two or three drags),
+    /// slower for longer drags.
+    /// </summary>
+    async Task TurnAsync(float px, CancellationToken ct)
+    {
+        var cam = layout.Find(BubbleKind.Camera);
+        if (cam == null) return;
+        var (w, h) = svc.ScreenSize();
+        var (cx, cy) = layout.At(cam, w, h);
+        var (aw, ah) = layout.SizeAt(cam, w, h);
+        float dir = Math.Sign(px), left = Math.Abs(px), most = Math.Max(120, aw * 0.8f);
+        var rnd = new Random();
+        while (left > 2)
+        {
+            ct.ThrowIfCancellationRequested();
+            float chunk = Math.Min(left, most);
+            left -= chunk;
+            float x1 = cx - dir * chunk / 2, x2 = cx + dir * chunk / 2;
+            float y = cy + (float)(rnd.NextDouble() - 0.5) * ah * 0.2f;
+            float bend = chunk * (0.05f + (float)rnd.NextDouble() * 0.05f);
+            long ms = (long)Math.Clamp(chunk * 1.8, 450, 1100);
+            await svc.DispatchAsync(() =>
             {
-                // learn it: a fixed drag, then measure again
-                float d = Math.Min(aw * 0.5f, 360);
-                double before = Forward;
-                await svc.SwipeAsync(cx - d / 2, cy, cx + d / 2, cy, 450);
-                await Task.Delay(300, ct);
-                if (!await CalibrateAsync(ct)) return;
-                double turned = Norm(Forward - before);
-                if (Math.Abs(turned) < 3) { AppLog.Add("camera: the drag didn't turn the view (put the camera area on open ground)"); return; }
-                perPx = turned / d;
-                Prefs.Edit()!.PutFloat("cam_deg_per_px", (float)perPx)!.Apply();
-                AppLog.Add($"camera: a 100 px drag turns {perPx * 100:0}°");
-                continue;
-            }
-            float px = (float)Math.Clamp(err / perPx, -aw * 0.95, aw * 0.95);
-            AppLog.Add($"camera: turning {(int)err}°");
-            await svc.SwipeAsync(cx - px / 2, cy, cx + px / 2, cy, 500);
-            await Task.Delay(300, ct);
-            if (!await CalibrateAsync(ct)) return;
+                var path = new Android.Graphics.Path();
+                path.MoveTo(x1, y);
+                path.QuadTo(cx, y - bend, x2, y + bend * 0.3f);
+                return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, ms))!.Build()!;
+            }, ms);
+            await Task.Delay(140 + rnd.Next(120), ct);
         }
     }
 
@@ -330,7 +359,8 @@ sealed class Nav
         var (cx, cy) = layout.At(cam, w, h);
         var (aw, ah) = layout.SizeAt(cam, w, h);
         float big = Math.Min(aw, ah) * 0.9f, small = Math.Min(aw, ah) * 0.12f;
-        for (int i = 0; i < 4; i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, 380); await Task.Delay(150, ct); }
+        // a few smooth pinches, like two fingers would
+        for (int i = 0; i < 3; i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, 620); await Task.Delay(220, ct); }
         AppLog.Add("camera: zoomed all the way out");
     }
 }

@@ -18,6 +18,9 @@ static class RunEngine
     const double GoneSecs = 3.0, NearDeadGoneSecs = 1.5;
     const double DenRespawnWait = 6;           // the LOD boss comes back (about 30 %) a moment after the kill
     const double ReturnWait = 8, TeleportLoad = 45;
+    const double GateCountdown = 30;            // the Labyrinth's gate opens 30 s after you come in
+    static readonly (int x, int y) LabyEntrance = (3595, 34153);
+    static DateTime arrivedAt;
 
     /// <summary>Why a Labyrinth / Den run can't start yet (null when everything is in place).</summary>
     public static string? Missing(BubbleLayout layout)
@@ -28,7 +31,6 @@ static class RunEngine
         if (layout.Find(BubbleKind.BossBar) == null) need.Add("the Boss HP bar box");
         if (!layout.Bubbles.Any(b => b.Kind == BubbleKind.Attack && b.Mode != PressMode.Off)) need.Add("an Attack bubble");
         if (need.Count > 0) return "For runs, place " + string.Join(", ", need) + " (Bubbles).";
-        if (!Capture.On) return "For runs, the Assistant must see the game: tap Screen on the panel (or Allow on \"See the game\" in the app).";
         return null;
     }
 
@@ -36,6 +38,23 @@ static class RunEngine
     {
         var nav = new Nav(svc, layout);
         bool den = mode == RunMode.Den;
+        // the run reads the screen (position, boss bar): ask Android for the screen when it isn't shared yet
+        if (!Capture.On)
+        {
+            AppLog.Add("screen: not shared yet, asking Android (choose Entire screen)");
+            svc.Main.Post(() => CaptureActivity.Request(svc));
+            var until = DateTime.UtcNow.AddSeconds(30);
+            while (!Capture.On && DateTime.UtcNow < until) await Task.Delay(500, ct);
+            if (!Capture.On)
+            {
+                AppLog.Add("screen: not shared, so the position and the boss bar can't be read: auto attack here instead");
+                Runner.SetPhase("auto attack (screen not shared)");
+                string? why = await Runner.PressUntil(svc, layout, () => false, ct);
+                if (why != null) throw new Exception(why);
+                return;
+            }
+            await Task.Delay(800, ct);
+        }
         int kicks = 0;
         for (int run = 1; runs == 0 || run <= runs; run++)
         {
@@ -47,6 +66,13 @@ static class RunEngine
             if (!inside)
             {
                 if (!await TeleportAsync(svc, layout, nav, den, ct)) throw new Exception("the teleport didn't work (see the log)");
+                await ArriveAsync(svc, layout, nav, den, ct);
+            }
+            else if (!den && here.Dist(LabyEntrance.x, LabyEntrance.y) < 450)
+            {
+                // just teleported in by hand: the gate may still be shut
+                AppLog.Add("at the Labyrinth entrance");
+                arrivedAt = DateTime.UtcNow;
                 await ArriveAsync(svc, layout, nav, den, ct);
             }
             else if (!den)
@@ -116,7 +142,7 @@ static class RunEngine
         while (DateTime.UtcNow < until)
         {
             var p = await nav.ReadAsync(ct, 1);
-            if (p.Ok && (den ? p.InDen : p.InLabyrinth)) { AppLog.Add("arrived: " + p.Map + " at " + p); return true; }
+            if (p.Ok && (den ? p.InDen : p.InLabyrinth)) { arrivedAt = DateTime.UtcNow; AppLog.Add("arrived: " + p.Map + " at " + p); return true; }
             await Task.Delay(800, ct);
         }
         AppLog.Add("teleport: didn't arrive (map: " + Screen.LastMap + ")");
@@ -138,6 +164,18 @@ static class RunEngine
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
+        if (!den)
+        {
+            // the gate opens 30 s after coming in: wait it out, then run
+            AppLog.Add("gate: waiting for the 30 s countdown");
+            while (true)
+            {
+                double left = GateCountdown - (DateTime.UtcNow - arrivedAt).TotalSeconds;
+                if (left <= 0) break;
+                Runner.ShowPhase($"gate opens in {Math.Ceiling(left)} s");
+                await Task.Delay((int)Math.Min(1000, left * 1000 + 50), ct);
+            }
+        }
         Runner.SetPhase("through the gate");
         await nav.GateAsync(tx, ty, 300, ct);
     }

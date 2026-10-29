@@ -48,6 +48,8 @@ static class Runner
     public static int Cycles { get; set; }
     public static int Kills { get; set; }
     public static void SetPhase(string p) { Phase = p; AppLog.Add(p); Raise(); }
+    /// <summary>Changes what the panel shows without a log line (a countdown).</summary>
+    public static void ShowPhase(string p) { Phase = p; Raise(); }
     public static string LastStop { get; private set; } = "";
     public static int Presses { get; private set; }
     /// <summary>Raised (any thread) when it starts, stops, or every few presses.</summary>
