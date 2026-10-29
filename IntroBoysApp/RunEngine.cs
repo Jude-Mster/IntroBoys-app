@@ -14,12 +14,14 @@ static class RunEngine
     static readonly (int x, int y) DenSpot = (1205, 2383);      // 1.3.7: where the character fights the LOD boss (PC 4.11.1)
     const double SpotTol = 150;               // close enough to a boss spot (map units)
     const double SpawnTimeout = 90;            // longest wait for a boss to show up
-    const double FightTimeout = 240;           // longest fight
+    const double FightTimeout = 480;           // longest fight (1.4.1: was 240 - boss 4 and 5 took longer on a weaker character and were left alive)
     const double GoneSecs = 3.0, NearDeadGoneSecs = 1.5;
     const double DenRespawnWait = 6;           // the LOD boss comes back (about 30 %) a moment after the kill
     const double ReturnWait = 8, TeleportLoad = 45;
     const double GateCountdown = 30;            // the Labyrinth's gate opens 30 s after you come in
     static readonly (int x, int y) LabyEntrance = (3595, 34153);
+    /// <summary>1.4.1: a point to walk through first on the way to each Labyrinth boss (null = straight there).</summary>
+    static readonly (int x, int y)?[] Via = { null, null, null, null, (3600, 3900) };
     static DateTime arrivedAt;
     static bool countdownDone;            // the 30 s gate countdown is only for the first run of a session
 
@@ -131,7 +133,7 @@ static class RunEngine
             Runner.CountRun(mode);
             AppLog.Add($"{Runner.ModeName(mode)} run {run} done");
             bool more = runs == 0 || run < runs;
-            await ReturnAsync(svc, layout, ct, more);
+            await ReturnAsync(svc, layout, nav, ct, more);
         }
     }
 
@@ -217,6 +219,18 @@ static class RunEngine
     {
         Runner.SetPhase("walking to " + name);
         bool there = false;
+        // 1.4.1: the straight line from boss 4 to boss 5 hugs the west side of the Labyrinth and runs into its walls (stuck at about
+        // 3415 , 4740 on two phones, and 3510 , 7200). The way that works - and the way members walk it - is down the middle (x 3600)
+        // to about 3600 , 3900, then across to boss 5.
+        if (!den && routeIndex >= 0 && routeIndex < Via.Length && Via[routeIndex] is { } via && Route(routeIndex).Count <= 1)
+        {
+            var here = await nav.ReadAsync(ct, 2);
+            if (here.Ok && here.Y > via.y + 300 && here.Dist(spot.x, spot.y) > here.Dist(via.x, via.y))
+            {
+                AppLog.Add($"walk: down the middle first ({via.x} , {via.y}), then to {name}");
+                await nav.WalkToAsync(via.x, via.y, 250, ct, 75, release: false);
+            }
+        }
         for (int tries = 0; tries < 4; tries++)
         {
             var way = Route(routeIndex);
@@ -451,13 +465,58 @@ static class RunEngine
         await Runner.LootBurstAsync(svc, layout, ct);       // 1.4.0: 6 taps (was 8) and no pause after: then straight to the next boss
     }
 
-    /// <summary>The return scroll after the last boss (and a moment for the town to load).</summary>
-    static async Task ReturnAsync(TapService svc, BubbleLayout layout, CancellationToken ct, bool more)
+    /// <summary>
+    /// The return scroll after the last boss. 1.4.1: the game asks to confirm first - the OPPO never got past that box, so the next run
+    /// started in the Labyrinth again. The box's button (CONFIRM / OK / YES / USE) is found by its text and pressed, and the run checks it
+    /// really is in town; once more if not.
+    /// </summary>
+    static async Task ReturnAsync(TapService svc, BubbleLayout layout, Nav nav, CancellationToken ct, bool more)
     {
         if (layout.Find(BubbleKind.Return) == null) { if (more) AppLog.Add("no Return bubble: teleporting straight on"); return; }
         Runner.SetPhase("return scroll");
-        await Press(svc, layout, BubbleKind.Return);
-        await Task.Delay(TimeSpan.FromSeconds(ReturnWait), ct);
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            await Press(svc, layout, BubbleKind.Return);
+            await Task.Delay(1200, ct);
+            await ConfirmAsync(svc, ct);
+            var until = DateTime.UtcNow.AddSeconds(ReturnWait + 4);
+            await Task.Delay(2500, ct);
+            while (DateTime.UtcNow < until)
+            {
+                var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
+                if (pl == Place.Town) { AppLog.Add("return scroll: in town (" + Screen.PlaceText + ")"); await Task.Delay(1500, ct); return; }
+                await Task.Delay(800, ct);
+            }
+            AppLog.Add(attempt == 1 ? "return scroll: still not in town - once more" : "return scroll: still not in town");
+        }
+        throw new Exception("the return scroll didn't take the character to town (is the Return bubble on the scroll, and its confirm box on screen?)");
+    }
+
+    /// <summary>A confirm box in the middle of the screen: presses its CONFIRM / OK / YES / USE button (never Cancel). False when there is none.</summary>
+    static async Task<bool> ConfirmAsync(TapService svc, CancellationToken ct)
+    {
+        string[] yes = { "confirm", "ok", "yes", "use", "accept", "확인", "ตกลง" };
+        List<TextLine> seen = new();
+        for (int look = 0; look < 3; look++)
+        {
+            if (look > 0) await Task.Delay(500, ct);
+            var lines = await Screen.TextAsync(0.15, 0.20, 0.70, 0.70, Math.Min(svc.ScreenSize().w, svc.ScreenSize().h) < 1000 ? 2 : 1);
+            var hit = lines.Where(l =>
+            {
+                var t = new string(l.Text.Where(ch => char.IsLetter(ch)).ToArray()).ToLowerInvariant();
+                return t.Length > 0 && t.Length <= 8 && yes.Any(w => t == w);
+            }).OrderByDescending(l => l.Y).FirstOrDefault();
+            if (lines.Count > 0) seen = lines;
+            if (hit.Text != null && hit.Text.Length > 0)
+            {
+                AppLog.Add("return scroll: pressing " + hit.Text.Trim());
+                await svc.PressAsync(hit.Cx, hit.Y + hit.H / 2, 80);
+                return true;
+            }
+        }
+        // for the next log: what was on screen instead (a button with another word can be added)
+        AppLog.Add("return scroll: no confirm button found" + (seen.Count > 0 ? " (saw: " + string.Join(" | ", seen.Take(8).Select(l => l.Text.Trim())) + ")" : ""));
+        return false;
     }
 
     /// <summary>Presses the member's bubble of this kind (if there is one).</summary>
