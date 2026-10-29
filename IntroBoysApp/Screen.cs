@@ -24,12 +24,15 @@ static class Screen
     public static Position LastPos { get; private set; }
     public static double LastHp { get; private set; } = -1;
     public static string LastMap { get; private set; } = "";
+    /// <summary>When the picture of the last reading was taken (a reading from the same picture again is no news).</summary>
+    public static long LastFrameAt { get; private set; }
 
     /// <summary>The position and map name (Ok false when they can't be read: sharing off, a loading screen, the mini-map closed).</summary>
     public static async Task<Position> PositionAsync()
     {
         var f = await Capture.SnapAsync(C);
         if (f == null) return default;
+        LastFrameAt = f.At;
         // the mini-map title and the numbers under it: the top right corner
         int x = (int)(f.W * 0.80), y = (int)(f.H * 0.035), w = f.W - x, h = (int)(f.H * 0.10);
         var lines = await Ocr.ReadAsync(f, x, y, w, h, 2);
@@ -40,7 +43,8 @@ static class Screen
             var m = Coord.Match(l.Text);
             if (m.Success && !pos.Ok && int.TryParse(m.Groups[1].Value, out int px) && int.TryParse(m.Groups[2].Value, out int py))
                 pos = new Position(true, px, py, "");
-            else if (l.Text.Contains('[') || l.Text.Contains('(') || l.Text.Any(char.IsLetter)) map = l.Text.Trim();
+            // the map name is the title in brackets ("[The Labyrinth (Adept)]"); the ping / FPS line above it is not a map
+            else if (l.Text.Contains('[') && l.Text.Count(char.IsLetter) >= 4) map = l.Text.Trim();
         }
         if (map.Length > 0) LastMap = map;
         if (pos.Ok) { pos = pos with { Map = map.Length > 0 ? map : LastMap }; LastPos = pos; }

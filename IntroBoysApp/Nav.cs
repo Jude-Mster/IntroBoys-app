@@ -246,8 +246,9 @@ sealed class Nav
                 var p = last;
                 double want = MapAngle(x - p.X, y - p.Y);
                 stick.Hold(Norm(hand * (want - off)));
+                long seenAt = Screen.LastFrameAt;
                 var np = await Screen.PositionAsync();
-                await Task.Delay(40, ct);
+                if (Screen.LastFrameAt == seenAt) { await Task.Delay(60, ct); continue; }
                 if (!np.Ok) continue;
                 if (np.Dist(p.X, p.Y) > 25) { lastMove = DateTime.UtcNow; if (waiting) { AppLog.Add("gate: open, going through"); waiting = false; } }
                 last = np;
@@ -303,8 +304,9 @@ sealed class Nav
                 double s = Norm(hand * (want - off));
                 // read the position while the stick is being pushed
                 stick.Hold(s);
+                long seenAt = Screen.LastFrameAt;
                 var np = await Screen.PositionAsync();
-                await Task.Delay(40, ct);
+                if (Screen.LastFrameAt == seenAt) { await Task.Delay(60, ct); continue; }      // the same picture: no news
                 if (!np.Ok || np.Dist(prev.X, prev.Y) > 3000) { if (++misses > 12) { AppLog.Add("walk: the position can't be read"); return false; } continue; }
                 misses = 0;
                 last = np;
@@ -337,8 +339,8 @@ sealed class Nav
 
                 // stuck: not getting closer for about 2 seconds -> walk round it (left, right, further each time)
                 history.Add((DateTime.UtcNow, p.Dist(x, y)));
-                history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > 2.2);
-                if (DateTime.UtcNow > detourUntil && history.Count >= 5 && (DateTime.UtcNow - history[0].t).TotalSeconds > 1.8 && history[0].d - history[^1].d < 70)
+                history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > 2.6);
+                if (DateTime.UtcNow > detourUntil && history.Count >= 4 && (DateTime.UtcNow - history[0].t).TotalSeconds > 2.0 && history[0].d - history[^1].d < 60)
                 {
                     if (++detours > 8) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
@@ -347,8 +349,9 @@ sealed class Nav
                         AppLog.Add($"walk: not moving at all at {p}");
                         return false;
                     }
-                    detour = (detours % 2 == 1 ? 1 : -1) * Math.Min(110, 50 + 15 * detours);
-                    detourUntil = DateTime.UtcNow.AddMilliseconds(900 + 150 * detours);
+                    // small turns first (a pillar or a corner), wider only if that didn't help
+                    detour = (detours % 2 == 1 ? 1 : -1) * Math.Min(100, 30 + 15 * ((detours - 1) / 2) * 2);
+                    detourUntil = DateTime.UtcNow.AddMilliseconds(700 + 120 * detours);
                     AppLog.Add($"walk: stuck at {p}, going round ({(int)detour}°)");
                     history.Clear();
                 }

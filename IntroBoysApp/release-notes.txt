@@ -1,1 +1,1 @@
-Runs without stopping (the move pad is held like a key). Buffs away from the boss before the fight and when due. Fixed the app stopping during a fight.
+Runs straight again: the walk only steers on new readings of the position. No more false 'kicked out' or 'still fighting'.

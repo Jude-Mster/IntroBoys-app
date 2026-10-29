@@ -249,14 +249,21 @@ public class TapService : AccessibilityService
         await shooting.WaitAsync();
         try
         {
-            if (shot != null && System.Environment.TickCount64 - shotAt < 350) return shot;
-            var done = new TaskCompletionSource<Frame?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Main.Post(() =>
+            if (shot != null && System.Environment.TickCount64 - shotAt < 120) return shot;
+            long wait = 340 - (System.Environment.TickCount64 - shotAt);
+            if (wait > 0) await Task.Delay((int)wait);
+            Frame? f = null;
+            for (int attempt = 0; attempt < 3 && f == null; attempt++)
             {
-                try { TakeScreenshot(0, MainExecutor!, new Shot(done)); }
-                catch { done.TrySetResult(null); }
-            });
-            var f = await Task.WhenAny(done.Task, Task.Delay(2500)) == done.Task ? await done.Task : null;
+                if (attempt > 0) await Task.Delay(150);
+                var done = new TaskCompletionSource<Frame?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Main.Post(() =>
+                {
+                    try { TakeScreenshot(0, MainExecutor!, new Shot(done)); }
+                    catch { done.TrySetResult(null); }
+                });
+                f = await Task.WhenAny(done.Task, Task.Delay(2500)) == done.Task ? await done.Task : null;
+            }
             if (f != null) { shot = f; shotAt = System.Environment.TickCount64; }
             return f ?? shot;
         }

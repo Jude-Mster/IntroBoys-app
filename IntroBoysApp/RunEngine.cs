@@ -204,10 +204,11 @@ static class RunEngine
             var way = Route(routeIndex);
             if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) break;
             var p = nav.Last;
-            if (p.Ok && !(den ? p.InDen : p.InLabyrinth) && p.Map.Length > 0) return false;
+            if (await OutsideAsync(nav, den, ct)) return false;
             // the character won't move: usually a boss or monster is still fighting it
-            var (hp, there) = await Screen.BossAsync(layout, true);
-            if (there)
+            // only a red bar counts here (text near the box can be a game message)
+            var (hp, _) = await Screen.BossAsync(layout, false);
+            if (hp > 0)
             {
                 AppLog.Add($"walk to {name}: something is still fighting us, finishing it first");
                 await FightAsync(svc, layout, nav, "the target", ct);
@@ -230,8 +231,7 @@ static class RunEngine
             await LootAsync(svc, layout, ct);
             if (!den) break;                    // the LOD boss may come back: watch a few seconds more
         }
-        var after = await nav.ReadAsync(ct, 1);
-        return !(after.Ok && after.Map.Length > 0 && !(den ? after.InDen : after.InLabyrinth));
+        return !await OutsideAsync(nav, den, ct);
     }
 
     /// <summary>Targets until the boss's HP bar shows (the boss spawned). False when it didn't within <paramref name="secs"/>.</summary>
@@ -280,7 +280,8 @@ static class RunEngine
             {
                 while (!watch.IsCancellationRequested)
                 {
-                    var (hp, there) = await Screen.BossAsync(layout, true);
+                    var (hp, there) = await Screen.BossAsync(layout, hi > 0);
+                    if (hp <= 0 && hi <= 0) there = false;            // never saw its red bar: text near the box isn't a boss
                     lastThere = there;
                     if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); } }
                     else goneSince ??= DateTime.UtcNow;
@@ -317,6 +318,21 @@ static class RunEngine
     }
 
     static DateTime lastBuff = DateTime.MinValue;
+
+    /// <summary>
+    /// Kicked out of the dungeon? Only when the mini-map title reads another map twice, a second apart (one misread is not enough).
+    /// </summary>
+    static async Task<bool> OutsideAsync(Nav nav, bool den, CancellationToken ct)
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            if (i > 0) await Task.Delay(1000, ct);
+            var p = await nav.ReadAsync(ct, 1);
+            if (!p.Ok || p.Map.Length == 0 || (den ? p.InDen : p.InLabyrinth)) return false;
+        }
+        AppLog.Add("map: " + Screen.LastMap);
+        return true;
+    }
 
     /// <summary>
     /// Buffs the way it works in the game: stop attacking, step a few steps away from the boss, press each Buff bubble with a moment
