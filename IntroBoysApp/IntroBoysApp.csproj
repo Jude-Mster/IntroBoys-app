@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <!-- Android 10 and newer -->
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>IntroBoys.App</RootNamespace>
+    <AssemblyName>IntroBoysApp</AssemblyName>
+
+    <!-- A new package name: the old guild app (com.blacklistintroboys.app) was signed with a different key, so this one
+         installs next to it instead of failing; members delete the old one afterwards. -->
+    <ApplicationId>com.blacklistintroboys.guild</ApplicationId>
+    <ApplicationTitle>BLACKLIST</ApplicationTitle>
+    <!-- The build sets the number from the GitHub run, so every build installs over the last one. -->
+    <ApplicationVersion Condition="'$(ApplicationVersion)' == ''">1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>
+
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <RuntimeIdentifiers>android-arm64;android-arm;android-x64</RuntimeIdentifiers>
+    <!-- JSON is read and written by hand (JsonDocument / Utf8JsonWriter), so trimming is safe -->
+    <TrimMode>partial</TrimMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Custom Tabs and Trusted Web Activity: opens the guild site in Chrome's app mode (GuildActivity.cs) -->
+    <PackageReference Include="Xamarin.AndroidX.Browser" Version="1.8.0.9" />
+  </ItemGroup>
+
+</Project>

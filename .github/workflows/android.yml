@@ -1,0 +1,96 @@
+name: Build the Android app
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install the .NET Android workload
+        run: dotnet workload install android
+
+      - name: Install the Android SDK parts the project needs
+        run: >
+          dotnet build IntroBoysApp/IntroBoysApp.csproj -t:InstallAndroidDependencies
+          -p:AndroidSdkDirectory="$ANDROID_HOME" -p:AcceptAndroidSDKLicenses=true
+
+      # The PUBLIC key that checks the site's license tickets (the same one the PC Assistant has). Not a secret, but kept
+      # with the other settings so it's never typed into a chat.
+      - name: License key
+        env:
+          LICENSE_PUBLIC_KEY: ${{ secrets.LICENSE_PUBLIC_KEY }}
+        run: |
+          key="$(printf '%s' "$LICENSE_PUBLIC_KEY" | tr -d '\r\n\t \"')"
+          if [ -z "$key" ]; then
+            echo "::warning::The LICENSE_PUBLIC_KEY secret is not set: this APK can't check licenses (the Assistant will say it has no license key)."
+          elif ! printf '%s' "$key" | grep -Eq '^[A-Za-z0-9+/]+=*$'; then
+            echo "::error::LICENSE_PUBLIC_KEY is not base64. Copy only the text between the quotes of PublicKeyB64 in LicenseConfig.cs."
+            exit 1
+          else
+            sed -i "s|__LICENSE_PUBLIC_KEY__|$key|" IntroBoysApp/LicenseConfig.cs
+            echo "License key set."
+          fi
+
+      # The guild's signing key. Every release must be signed with the same key, or phones refuse the update.
+      - name: Signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "SIGN=1" >> "$GITHUB_ENV"
+            echo "Signing with the guild key."
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: this APK is signed with a throwaway test key and can't be updated by a properly signed one later."
+          fi
+
+      - name: Build the APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          args=(-c Release -o out -p:ApplicationVersion=${{ github.run_number }} -p:AndroidSdkDirectory="$ANDROID_HOME")
+          if [ "$SIGN" = "1" ]; then
+            # a PKCS12 key store (keytool's default) uses the store password for the key too
+            if [ -z "$ANDROID_KEY_PASSWORD" ]; then export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"; fi
+            args+=(-p:AndroidKeyStore=true -p:AndroidSigningKeyStore="$RUNNER_TEMP/release.jks"
+                   -p:AndroidSigningKeyAlias="${ANDROID_KEY_ALIAS:-introboys}"
+                   -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEY_PASSWORD)
+          fi
+          dotnet publish IntroBoysApp/IntroBoysApp.csproj "${args[@]}"
+
+      - name: Name the APK and show its signature
+        run: |
+          apk="$(ls out/*-Signed.apk | head -n1)"
+          ver="$(grep -oP '(?<=<ApplicationDisplayVersion>)[^<]+' IntroBoysApp/IntroBoysApp.csproj)"
+          name="IntroBoys-${ver}-build${{ github.run_number }}.apk"
+          mkdir -p dist && cp "$apk" "dist/$name"
+          ls -la dist
+          signer="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n1)apksigner"
+          "$signer" verify --print-certs "dist/$name" | grep -E "Signer #1 certificate (DN|SHA-256)" || true
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IntroBoys-apk
+          path: dist/*.apk
+          retention-days: 30

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET" />
+
+  <!-- Android 11+: lets the app see which browsers can open the guild site in app mode -->
+  <queries>
+    <intent>
+      <action android:name="android.support.customtabs.action.CustomTabsService" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW" />
+      <category android:name="android.intent.category.BROWSABLE" />
+      <data android:scheme="https" />
+    </intent>
+  </queries>
+
+  <application
+      android:label="BLACKLIST"
+      android:icon="@mipmap/ic_guild"
+      android:roundIcon="@mipmap/ic_guild"
+      android:allowBackup="false"
+      android:supportsRtl="true"
+      android:theme="@style/AppTheme" />
+</manifest>

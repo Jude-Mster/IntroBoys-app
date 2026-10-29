@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="guild_bg">#050505</color>
+  <color name="assist_bg">#D61F26</color>
+  <color name="ink">#0E0E10</color>
+
+  <string name="tap_service_label">IntroBoys Assistant taps</string>
+  <string name="tap_service_desc">Lets the IntroBoys Assistant press the game buttons you placed bubbles on (attack, buffs, auto loot). It only taps where your bubbles are, only while you run it, and only with an active Assistant license. It does not read your messages or other apps.</string>
+
+  <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">@color/ink</item>
+    <item name="android:statusBarColor">@color/ink</item>
+    <item name="android:navigationBarColor">@color/ink</item>
+    <item name="android:colorAccent">@color/assist_bg</item>
+  </style>
+
+  <!-- the guild launcher shows nothing itself: it hands over to Chrome at once -->
+  <style name="LaunchTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">@color/guild_bg</item>
+    <item name="android:statusBarColor">@color/guild_bg</item>
+    <item name="android:navigationBarColor">@color/guild_bg</item>
+  </style>
+</resources>
