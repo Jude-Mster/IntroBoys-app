@@ -72,13 +72,15 @@ sealed class Overlay
         var root = Ui.Row(c, 8);
         root.SetGravity(GravityFlags.Top);
 
-        var s = new TextView(c) { Text = "S", Gravity = GravityFlags.Center };
-        s.SetTextColor(Color.White);
-        s.SetTextSize(Android.Util.ComplexUnitType.Sp, 20);
-        s.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        // the guild's brush S on a red circle (the app icon)
+        var s = new ImageView(c);
+        s.SetImageResource(Resource.Drawable.logo_s);
+        s.SetScaleType(ImageView.ScaleType.FitCenter);
+        int pad = Ui.Dp(c, 9);
+        s.SetPadding(pad, pad, pad, pad);
         s.Background = Ui.Circle(Ui.Red, Color.White, Ui.Dp(c, 2));
         s.Elevation = Ui.Dp(c, 6);
-        root.AddView(s, new LinearLayout.LayoutParams(Ui.Dp(c, 44), Ui.Dp(c, 44)));
+        root.AddView(s, new LinearLayout.LayoutParams(Ui.Dp(c, 46), Ui.Dp(c, 46)));
 
         panel = Ui.CardBox(c, 8);
         panel.Background = Ui.Round(c, Color.Argb(235, 18, 18, 21), 14, Ui.Line);

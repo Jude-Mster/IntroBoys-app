@@ -46,15 +46,18 @@ sealed class Editor
         panel = Ui.CardBox(c, 8);
         panel.Background = Ui.Round(c, Color.Argb(240, 18, 18, 21), 14, Ui.Line);
         var head = Ui.Row(c, 6);
-        var t = Ui.Title(c, "PLACE YOUR BUBBLES", 14);
+        var t = Ui.Title(c, "BUBBLES", 14);
         head.AddView(t, Ui.Weight());
         head.AddView(Ui.Button(c, "⇄", false, FlipSide, 13));
         var fold = Ui.Button(c, "–", false, null, 13);
         head.AddView(fold);
+        // always there, even with the panel folded: leave without saving, or save
+        head.AddView(Ui.Button(c, "✕", false, close, 13));
+        head.AddView(Ui.Button(c, "✓", true, Save, 13));
         panel.AddView(head, Ui.Wide());
 
         body = Ui.Column(c, 8);
-        body.AddView(Ui.Text(c, "Add a bubble, then drag it onto the game button. The dot in the middle is where it taps.", 12, Ui.Muted));
+        body.AddView(Ui.Text(c, "Add a bubble, then drag it onto the game button (the dot in the middle is where it taps). Tap a bubble to change or remove it. ✓ saves, ✕ leaves without saving.", 12, Ui.Muted));
         var kinds = new[] { BubbleKind.Attack, BubbleKind.Target, BubbleKind.Skill, BubbleKind.Buff, BubbleKind.Potion, BubbleKind.AutoLoot, BubbleKind.Other };
         LinearLayout? row = null;
         for (int i = 0; i < kinds.Length; i++)
@@ -63,7 +66,7 @@ sealed class Editor
             var k = kinds[i];
             row!.AddView(Ui.Button(c, "+ " + Bubble.Name(k), false, () => AddBubble(k), 12), Ui.Weight());
         }
-        if (kinds.Length % 3 != 0) for (int i = kinds.Length % 3; i < 3; i++) row!.AddView(new View(c), Ui.Weight());
+        if (kinds.Length % 3 != 0) for (int i = kinds.Length % 3; i < 3; i++) row!.AddView(new View(c), new LinearLayout.LayoutParams(0, 1, 1));   // an empty slot: 1 px tall, never the whole screen
 
         // the selected bubble
         selBox = Ui.Column(c, 8);
@@ -97,7 +100,12 @@ sealed class Editor
         body.AddView(selBox, Ui.Wide());
 
         count = Ui.Text(c, "", 12, Ui.Soft);
-        body.AddView(count);
+        var countRow = Ui.Row(c, 6);
+        countRow.AddView(count, Ui.Weight());
+        var clear = Ui.Button(c, "Remove all", false, RemoveAll, 12);
+        clear.SetTextColor(Color.ParseColor("#FF8A8E"));
+        countRow.AddView(clear);
+        body.AddView(countRow, Ui.Wide());
         body.AddView(Ui.Text(c, "Keep the floating S away from your bubbles: a tap that lands on it never reaches the game.", 11, Ui.Muted));
         var foot = Ui.Row(c, 6);
         foot.AddView(Ui.Button(c, "Cancel", false, close, 13), Ui.Weight());
@@ -245,6 +253,15 @@ sealed class Editor
         views.Remove(selected);
         layout.Relabel();
         foreach (var v in views) v.Invalidate();
+        Select(null);
+        UpdateCount();
+    }
+
+    void RemoveAll()
+    {
+        foreach (var v in views) Root.RemoveView(v);
+        views.Clear();
+        layout.Bubbles.Clear();
         Select(null);
         UpdateCount();
     }

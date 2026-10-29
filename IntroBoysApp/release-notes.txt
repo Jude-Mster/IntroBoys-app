@@ -1,1 +1,1 @@
-Updates from inside the app, and a step-by-step first-time set-up.
+Bubble screen: close and save buttons always on top, remove one or all bubbles. The floating S never shows by itself and goes away when the screen turns off.

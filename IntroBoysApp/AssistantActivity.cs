@@ -215,7 +215,7 @@ public class AssistantActivity : Activity
         bubbleList!.Text = layout.Bubbles.Count == 0
             ? "No bubbles placed yet."
             : string.Join("\n", layout.Bubbles.Select(b => "•  " + b.Label + "  " + Bubble.Name(b.Kind) + " · " + b.Describe()));
-        bool shown = TapService.Prefs.GetBoolean("show_control", false);
+        bool shown = TapService.ControlWanted;
         showControl!.Text = shown ? "Hide the floating S" : "Show the floating S";
         runMsg!.Text = Runner.Running ? "Auto attack is running · " + Runner.Presses + " presses" :
                        !tapsOn ? "The floating S shows up once IntroBoys Assistant taps is switched on (set-up step " + stepTaps.Number + ")." :
@@ -290,11 +290,14 @@ public class AssistantActivity : Activity
 
     void ToggleControl()
     {
-        bool show = !TapService.Prefs.GetBoolean("show_control", false);
-        TapService.SetControlVisible(show);
+        bool show = !TapService.ControlWanted;
         if (show && TapService.Instance == null)
-            Toast.MakeText(this, "Switch on IntroBoys Assistant taps first (set-up step " + stepTaps!.Number + "): the S shows up as soon as it is on.", ToastLength.Long)!.Show();
-        else if (show)
+        {
+            Toast.MakeText(this, "Switch on IntroBoys Assistant taps first (set-up step " + stepTaps!.Number + ").", ToastLength.Long)!.Show();
+            return;
+        }
+        TapService.SetControlVisible(show);
+        if (show)
             Toast.MakeText(this, "The S is on screen. Now open the game.", ToastLength.Short)!.Show();
         Refresh();
     }

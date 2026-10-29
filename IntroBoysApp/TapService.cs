@@ -38,8 +38,36 @@ public class TapService : AccessibilityService
         Overlay = new Overlay(this);
         License.Begin();
         try { StateChanged?.Invoke(); } catch { /* a listener's problem */ }
-        // asked from the app before the switch was on: show the floating S now
-        if (Prefs.GetBoolean("show_control", false)) Overlay.ShowControl();
+        // Nothing shows by itself: not when the phone starts, not when the app opens. The floating S appears only when the
+        // member taps "Show the floating S" in the app.
+        ControlWanted = false;
+        screen = new ScreenWatch(this);
+        var f = new IntentFilter(Intent.ActionScreenOff);
+        f.AddAction(Intent.ActionUserPresent);
+        RegisterReceiver(screen, f);
+    }
+
+    /// <summary>True while the member wants the floating S (this session only: never remembered across a restart).</summary>
+    public static bool ControlWanted { get; private set; }
+    ScreenWatch? screen;
+
+    /// <summary>
+    /// Screen off: everything over the game goes away at once (auto attack stops, the editor closes without saving), so nothing
+    /// is ever left over the lock screen. Unlocked again: the floating S comes back if it was showing.
+    /// </summary>
+    sealed class ScreenWatch : BroadcastReceiver
+    {
+        readonly TapService s;
+        public ScreenWatch(TapService s) { this.s = s; }
+        public override void OnReceive(Context? context, Intent? intent)
+        {
+            if (intent?.Action == Intent.ActionScreenOff)
+            {
+                Runner.Stop("Stopped: the screen turned off.");
+                s.Overlay?.CloseAll();
+            }
+            else if (intent?.Action == Intent.ActionUserPresent && ControlWanted) s.Overlay?.ShowControl();
+        }
     }
 
     public override bool OnUnbind(Intent? intent)
@@ -58,6 +86,8 @@ public class TapService : AccessibilityService
     {
         if (Instance != this) return;
         Runner.Stop("The tap permission was switched off.");
+        if (screen != null) { try { UnregisterReceiver(screen); } catch { /* not registered */ } screen = null; }
+        ControlWanted = false;
         try { Overlay?.CloseAll(); } catch { /* already gone */ }
         Overlay = null;
         Instance = null;
@@ -120,11 +150,11 @@ public class TapService : AccessibilityService
         public override void OnCancelled(GestureDescription? gestureDescription) => done.TrySetResult(false);
     }
 
-    /// <summary>Show or hide the floating S (also remembered for when the service starts).</summary>
+    /// <summary>Show or hide the floating S. Needs the tap permission; never remembered across a restart.</summary>
     public static void SetControlVisible(bool show)
     {
-        Prefs.Edit()!.PutBoolean("show_control", show)!.Apply();
         var s = Instance;
+        ControlWanted = show && s != null;
         if (s == null) return;
         s.Main.Post(() =>
         {
