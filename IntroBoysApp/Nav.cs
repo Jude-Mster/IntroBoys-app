@@ -629,13 +629,8 @@ sealed class Nav
         // a few smooth pinches, like two fingers would
         for (int i = 0; i < (tiny ? 5 : 3); i++) { ct.ThrowIfCancellationRequested(); await svc.PinchAsync(cx, cy, big, small, tiny ? 800 : 620); await Task.Delay(tiny ? 320 : 220, ct); }
         AppLog.Add("camera: zoomed all the way out");
-        if (tiny)
-        {
-            // 1.4.5: and the view is tilted up, so it looks along the corridor instead of at the ground.
-            // 1.4.6: by a slow drag UP (a drag down tilted it toward the ground on the cloud phone)
-            float y1 = Math.Min(h - 10, cy + h * 0.25f), y2 = Math.Max(10, cy - h * 0.25f);
-            for (int i = 0; i < 2; i++) { await svc.SwipeAsync(cx, y1, cx, y2, 900); await Task.Delay(320, ct); }
-            AppLog.Add("camera: tilted up");
-        }
+        // 1.5.0: no extra tilt any more. All the way out, the game sets the view itself the way the member has it in the video (looking
+        // along the floor at the gate, the wall and its torches across the top); the drags of 1.4.5 / 1.4.6 tilted it out of view
+        // (LDPlayer's 676-pixel-high window counted as a small screen too).
     }
 }
