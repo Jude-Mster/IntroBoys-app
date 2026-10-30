@@ -20,7 +20,7 @@ sealed class Stick
     Task? pump;
     // ms per continued piece of the touch. 1.4.5: 600 on a slow phone (the cloud phone): short pieces reached the game late there,
     // the held touch broke between them and the character ran in stops and starts
-    public long Piece = 400;      // 1.5.7: 400 (was 220): fewer pieces, fewer chances for the touch to break
+    public long Piece = 220;      // 1.5.9: back to 220 on normal phones (the smooth runs of 1.5.2); slow phones 800
     bool wiggle;
 
     public Stick(TapService svc, BubbleLayout layout)
@@ -180,7 +180,9 @@ sealed class Nav
         var (sw0, sh0) = svc.ScreenSize();
         Slow = Math.Min(sw0, sh0) <= 800 || Prefs.GetInt($"nav_step_ms_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", 320) > 320;
         if (Slow) stick.Piece = 800;
-        stick.Single = Prefs.GetBoolean(SingleKey, false);
+        // 1.5.9: one push at a time only on a slow phone (it switched on by mistake on a normal phone and made it stop and go)
+        stick.Single = Slow && Prefs.GetBoolean(SingleKey, false);
+        if (!Slow && Prefs.GetBoolean(SingleKey, false)) Prefs.Edit()!.Remove(SingleKey)!.Apply();
         hand = Prefs.GetInt("nav_hand", 0) is int hd && hd != 0 ? hd : 1;
     }
 
@@ -311,6 +313,26 @@ sealed class Nav
     {
         var cam = layout.Find(BubbleKind.Camera);
         if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
+        // 1.5.9: no movement test after the teleport. The view after a teleport is always the same (about 130° on the map), so once this
+        // phone has faced the gate (the turn is remembered), that turn is made again and the direction is taken as the gate's; the walk
+        // corrects any small error as it runs. The step-and-back test is only made the very first time.
+        if (!known && Prefs.GetInt("nav_hand", 0) != 0)
+        {
+            var (sw0, sh0) = svc.ScreenSize();
+            var sv = (Prefs.GetString($"gate_turn_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", "") ?? "").Split(',');
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            if (sv.Length == 3 && double.TryParse(sv[1], System.Globalization.NumberStyles.Float, inv, out double gTo)
+                && double.TryParse(sv[2], System.Globalization.NumberStyles.Float, inv, out double gPx) && Math.Abs(Norm(toward - gTo)) <= 15)
+            {
+                Runner.ShowPhase("camera: turning to the gate");
+                await TurnAsync((float)gPx, ct);
+                hand = Prefs.GetInt("nav_hand", 1);
+                off = Norm(toward - hand * 90);                 // Forward = the gate's direction
+                known = true;
+                AppLog.Add($"camera: turned to the gate as last time (no test step)");
+                return;
+            }
+        }
         if (!known && !await CalibrateAsync(ct)) return;
         // 1.4.2: how far a drag turns the view is kept per screen size (a 720p cloud phone turns very differently from a 1080p phone);
         // a phone that already learned it under the old name keeps using that
@@ -589,7 +611,7 @@ sealed class Nav
                     if (++retouches <= 3 || retouches % 10 == 0) AppLog.Add("walk: not moving - touching the move pad again");
                     // 1.5.8: the second time in one walk on a phone that holds the touch piece by piece: it drops such touches - from now
                     // on one whole push at a time (remembered for this screen)
-                    if (retouches == 2 && !stick.Single)
+                    if (retouches == 2 && !stick.Single && Slow)
                     {
                         stick.Single = true;
                         Prefs.Edit()!.PutBoolean(SingleKey, true)!.Apply();

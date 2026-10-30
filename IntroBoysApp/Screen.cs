@@ -84,7 +84,31 @@ static class Screen
         var (x, y, w, h) = PosBox(f);
         // 1.4.3: a small screen (720p: the numbers are ~10 px high) is read at 3 times the size
         int sc = Math.Min(f.W, f.H) <= 800 ? 3 : 2;
+        long now0 = System.Environment.TickCount64;
+        // 1.5.9: while walking, only the line with the numbers is read (fast: more readings a second, so the steering is smoother); the
+        // whole corner with the map's title every 2.5 s, and whenever the line alone doesn't read
+        if (numBox is { } nb && now0 - titleAt < 2500 && nb.x + nb.w <= f.W && nb.y + nb.h <= f.H)
+        {
+            var (pq, _) = ReadPos(await Ocr.ReadAsync(f, nb.x, nb.y, nb.w, nb.h, sc));
+            if (pq.Ok)
+            {
+                posMisses = 0;
+                pq = pq with { Map = LastMap, Title = "" };
+                LastPos = pq;
+                var pl = PlaceOf(pq);
+                if (pl != Place.Unknown && pl != LastPlace && LastPlace != Place.Unknown) titleAt = 0;   // a different place: read the title next time
+                return pq;
+            }
+            numBox = null;
+        }
         var (pos, map) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, sc));
+        if (pos.Ok && lastPick is TextLine lp)
+        {
+            int px0 = (int)Math.Max(0, lp.X - lp.W * 0.5f), py0 = (int)Math.Max(0, lp.Y - lp.H * 0.6f);
+            int pw = (int)Math.Min(f.W - px0, lp.W * 2.0f), ph = (int)Math.Min(f.H - py0, lp.H * 2.2f);
+            if (pw > 20 && ph > 8) numBox = (px0, py0, pw, ph);
+            if (map.Length > 0) titleAt = now0;
+        }
         // 1.4.4: a small screen that didn't read: once more at the other size before anything else
         if (!pos.Ok && sc == 3) { var (pa, ma) = ReadPos(await Ocr.ReadAsync(f, x, y, w, h, 2)); if (pa.Ok) { pos = pa; if (ma.Length > 0) map = ma; } }
         if (!pos.Ok)
@@ -186,8 +210,14 @@ static class Screen
             if (below.Count > 0) pick = below[0];
             else return (new Position(false, 0, 0, "", ""), map);
         }
+        lastPick = pick.l;
         return (new Position(true, pick.x, pick.y, "", ""), map);
     }
+
+    static TextLine? lastPick;
+    // 1.5.9: the numbers' own line, padded (read alone it is a few times faster than the whole corner), and when the title was last read
+    static (int x, int y, int w, int h)? numBox;
+    static long titleAt;
 
     /// <summary>The map name only (Ok false when nothing is readable).</summary>
     public static async Task<string> MapAsync() { await PositionAsync(); return LastMap; }
