@@ -27,6 +27,18 @@ static class Runner
         get => Math.Clamp(Prefs.GetInt("run_count", 0), 0, 999);
         set { Prefs.Edit()!.PutInt("run_count", Math.Clamp(value, 0, 999))!.Apply(); Raise(); }
     }
+    /// <summary>
+    /// 1.5.2: the war break for Labyrinth / Den runs: at :27 of every war hour (every 2 hours, even UTC hours) return to town, auto hunt
+    /// on (it joins the war by itself; the war pop-up is left alone), and after the war auto hunt off and back to the run from boss 1.
+    /// </summary>
+    public static bool WarBreak
+    {
+        get => Prefs.GetBoolean("war_break", false);
+        set { Prefs.Edit()!.PutBoolean("war_break", value)!.Apply(); AppLog.Add("war break: " + (value ? "on" : "off")); Raise(); }
+    }
+    /// <summary>1.5.2: on the war break right now (for the panel and the website).</summary>
+    public static bool OnWarBreak { get; set; }
+
     /// <summary>All-time finished runs on this phone.</summary>
     public static int TotalLabyrinth => Prefs.GetInt("total_laby", 0);
     public static int TotalDen => Prefs.GetInt("total_den", 0);

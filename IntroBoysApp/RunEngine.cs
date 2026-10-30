@@ -85,66 +85,86 @@ static class RunEngine
         int kicks = 0;
         for (int run = 1; runs == 0 || run <= runs; run++)
         {
-            ct.ThrowIfCancellationRequested();
-            Runner.SetPhase($"{Runner.ModeName(mode)} run {run}: starting");
-            var here = await nav.ReadAsync(ct);
-            var place = await PlaceNowAsync(nav, ct);
-            AppLog.Add("where: " + Screen.PlaceText);
-            bool inside = here.Ok && place == Target(den);
-            int first = 0;
-            if (!inside)
+            // 1.5.2: the war break (Runner.WarBreak): the run is cut off at :27 of every war hour wherever it is, then WarBreakAsync
+            // (return scroll, auto hunt on through the war, auto hunt off after it) and the run starts again from the teleport, at boss 1
+            using var warCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var rt = warCts.Token;
+            if (Runner.WarBreak && mode != RunMode.Attack)
             {
-                // 1.3.8: a second try (the list opened on another page, or a word was misread on a smaller screen)
-                if (!await TeleportAsync(svc, layout, nav, den, ct))
+                if (WarClock.InBreak(DateTime.UtcNow)) { await WarBreakAsync(svc, layout, nav, ct); restartAtOne = true; run--; continue; }
+                warCts.CancelAfter(WarClock.NextBreak(DateTime.UtcNow) - DateTime.UtcNow);
+            }
+            try
+            {
+                rt.ThrowIfCancellationRequested();
+                Runner.SetPhase($"{Runner.ModeName(mode)} run {run}: starting");
+                var here = await nav.ReadAsync(rt);
+                var place = await PlaceNowAsync(nav, rt);
+                AppLog.Add("where: " + Screen.PlaceText);
+                bool inside = here.Ok && place == Target(den);
+                int first = 0;
+                if (!inside)
                 {
-                    AppLog.Add("teleport: trying once more");
-                    await Task.Delay(2000, ct);
-                    if (!await TeleportAsync(svc, layout, nav, den, ct)) throw new Exception("the teleport didn't work (see the log)");
+                    // 1.3.8: a second try (the list opened on another page, or a word was misread on a smaller screen)
+                    if (!await TeleportAsync(svc, layout, nav, den, rt))
+                    {
+                        AppLog.Add("teleport: trying once more");
+                        await Task.Delay(2000, rt);
+                        if (!await TeleportAsync(svc, layout, nav, den, rt)) throw new Exception("the teleport didn't work (see the log)");
+                    }
+                    await ArriveAsync(svc, layout, nav, den, rt);
                 }
-                await ArriveAsync(svc, layout, nav, den, ct);
-            }
-            else if (!den && here.Dist(LabyEntrance.x, LabyEntrance.y) < 450)
-            {
-                // just teleported in by hand: the gate may still be shut
-                AppLog.Add("at the Labyrinth entrance");
-                arrivedAt = DateTime.UtcNow;
-                await ArriveAsync(svc, layout, nav, den, ct);
-            }
-            else if (!den && restartAtOne)
-            {
-                AppLog.Add("back in the Labyrinth after a kick: starting at boss 1");
-            }
-            else if (!den)
-            {
-                // already inside (a stopped run): carry on at the nearest boss
-                first = Enumerable.Range(0, LabySpots.Length).OrderBy(i => here.Dist(LabySpots[i].x, LabySpots[i].y)).First();
-                if (here.Dist(LabySpots[first].x, LabySpots[first].y) > 2500 && here.Y > LabySpots[0].y) first = 0;
-                AppLog.Add($"already in the Labyrinth: starting at boss {first + 1}");
-            }
+                else if (!den && here.Dist(LabyEntrance.x, LabyEntrance.y) < 450)
+                {
+                    // just teleported in by hand: the gate may still be shut
+                    AppLog.Add("at the Labyrinth entrance");
+                    arrivedAt = DateTime.UtcNow;
+                    await ArriveAsync(svc, layout, nav, den, rt);
+                }
+                else if (!den && restartAtOne)
+                {
+                    AppLog.Add("back in the Labyrinth after a kick: starting at boss 1");
+                }
+                else if (!den)
+                {
+                    // already inside (a stopped run): carry on at the nearest boss
+                    first = Enumerable.Range(0, LabySpots.Length).OrderBy(i => here.Dist(LabySpots[i].x, LabySpots[i].y)).First();
+                    if (here.Dist(LabySpots[first].x, LabySpots[first].y) > 2500 && here.Y > LabySpots[0].y) first = 0;
+                    AppLog.Add($"already in the Labyrinth: starting at boss {first + 1}");
+                }
 
-            restartAtOne = false;
-            bool kicked = false;
-            if (den) kicked = !await BossAsync(svc, layout, nav, DenSpot, "the Den boss", true, ct, 5);
-            else
-                for (int b = first; b < LabySpots.Length && !kicked; b++)
-                    kicked = !await BossAsync(svc, layout, nav, LabySpots[b], $"boss {b + 1}", false, ct, b);
+                restartAtOne = false;
+                bool kicked = false;
+                if (den) kicked = !await BossAsync(svc, layout, nav, DenSpot, "the Den boss", true, rt, 5);
+                else
+                    for (int b = first; b < LabySpots.Length && !kicked; b++)
+                        kicked = !await BossAsync(svc, layout, nav, LabySpots[b], $"boss {b + 1}", false, rt, b);
 
-            if (kicked)
+                if (kicked)
+                {
+                    if (++kicks > 10) throw new Exception("kicked out of the dungeon too often");
+                    // 1.3.7: back to the run from stage 1 (boss 1): wait for the town to load, then the teleport again
+                    AppLog.Add($"kicked out ({Screen.PlaceText}): back to the run, starting at boss 1 again");
+                    Runner.SetPhase("kicked out - back to the run");
+                    restartAtOne = true;
+                    run--;
+                    await Task.Delay(5000, rt);
+                    continue;
+                }
+                Runner.Cycles++;
+                Runner.CountRun(mode);
+                AppLog.Add($"{Runner.ModeName(mode)} run {run} done");
+                bool more = runs == 0 || run < runs;
+                await ReturnAsync(svc, layout, nav, rt, more);
+
+            }
+            catch (System.OperationCanceledException) when (!ct.IsCancellationRequested && warCts.IsCancellationRequested)
             {
-                if (++kicks > 10) throw new Exception("kicked out of the dungeon too often");
-                // 1.3.7: back to the run from stage 1 (boss 1): wait for the town to load, then the teleport again
-                AppLog.Add($"kicked out ({Screen.PlaceText}): back to the run, starting at boss 1 again");
-                Runner.SetPhase("kicked out - back to the run");
+                AppLog.Add("war break: it's :27 - leaving the run for the war");
+                await WarBreakAsync(svc, layout, nav, ct);
                 restartAtOne = true;
                 run--;
-                await Task.Delay(5000, ct);
-                continue;
             }
-            Runner.Cycles++;
-            Runner.CountRun(mode);
-            AppLog.Add($"{Runner.ModeName(mode)} run {run} done");
-            bool more = runs == 0 || run < runs;
-            await ReturnAsync(svc, layout, nav, ct, more);
         }
     }
 
@@ -281,7 +301,16 @@ static class RunEngine
         int fights = 0;
         while (true)
         {
-            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct);
+            // 1.5.2 (as PC 4.11): after a Den kill everything is looted first (above), then the respawn is watched for 6 s with the
+            // target pressed every second; a respawned boss is fought and looted the same way, up to 5 times; then the return scroll
+            if (den && fights > 0)
+            {
+                if (fights > 5) break;
+                AppLog.Add($"LOD: watching {DenRespawnWait:0} s for the boss to respawn");
+            }
+            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0);
+            if (den && fights > 0 && up == 0) { AppLog.Add("LOD: no respawn"); break; }
+            if (den && fights > 0 && up > 0) AppLog.Add($"LOD: the boss respawned ({fights}) - attacking it");
             if (up < 0) return false;                          // 1.3.7: not in the dungeon any more
             if (up == 0)
             {
@@ -303,7 +332,7 @@ static class RunEngine
     /// Targets until the boss's HP bar shows (the boss spawned): 1. 0 when it didn't within <paramref name="secs"/>; -1 when the character
     /// is not in the dungeon any more (1.3.7: looked at every 5 s - it used to walk on toward the boss spot in town).
     /// </summary>
-    static async Task<int> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, bool den, CancellationToken ct)
+    static async Task<int> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, bool den, CancellationToken ct, double targetEvery = 3.0)
     {
         Runner.SetPhase("waiting for " + name);
         var until = DateTime.UtcNow.AddSeconds(secs);
@@ -320,7 +349,7 @@ static class RunEngine
                 var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
                 if (pl != Place.Unknown && pl != Target(den) && await OutsideAsync(nav, den, ct)) return -1;
             }
-            if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(3); }
+            if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(targetEvery); }
             if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
             await Task.Delay(300, ct);
         }
@@ -434,6 +463,36 @@ static class RunEngine
     }
 
     static DateTime lastBuff = DateTime.MinValue;
+
+    /// <summary>
+    /// 1.5.2: the war break. Return scroll to town (it goes on if that fails), the Auto hunt bubble on - the game's auto hunt joins the
+    /// war by itself (the war pop-up is never cancelled) - wait until the war is over (:49), Auto hunt off, and the run starts again.
+    /// </summary>
+    static async Task WarBreakAsync(TapService svc, BubbleLayout layout, Nav nav, CancellationToken ct)
+    {
+        Runner.OnWarBreak = true;
+        try
+        {
+            Runner.SetPhase("war break: returning to town");
+            try { await ReturnAsync(svc, layout, nav, ct, true); }
+            catch (System.OperationCanceledException) { throw; }
+            catch (Exception ex) { AppLog.Add("war break: " + ex.Message + " - going on"); }
+            bool hunt = layout.Find(BubbleKind.AutoHunt) != null;
+            if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("war break: auto hunt on - it joins the war"); }
+            else AppLog.Add("war break: no Auto hunt bubble placed - waiting in town (place one in Bubbles to join the war)");
+            var back = WarClock.BackAt(DateTime.UtcNow);
+            while (DateTime.UtcNow < back)
+            {
+                var left = back - DateTime.UtcNow;
+                Runner.ShowPhase($"war break · back to the run in {(int)left.TotalMinutes}:{left.Seconds:00}");
+                await Task.Delay(1000, ct);
+            }
+            if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("war break: the war is over - auto hunt off"); }
+            await Task.Delay(2500, ct);
+            Runner.SetPhase("war break over: back to the run");
+        }
+        finally { Runner.OnWarBreak = false; }
+    }
 
     static Place Target(bool den) => den ? Place.Den : Place.Labyrinth;
     static bool restartAtOne;

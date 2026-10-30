@@ -70,6 +70,10 @@ static class Remote
         ["position"] = Screen.LastPos.ToString(),
         ["map"] = Screen.LastPlace == Place.Unknown ? Screen.LastMap : Screen.PlaceText,
         ["place"] = Screen.LastPlace.ToString().ToLowerInvariant(),
+        ["war_break"] = Runner.WarBreak,
+        ["on_war_break"] = Runner.OnWarBreak,
+        ["war_next"] = new DateTimeOffset(WarClock.NextBreak(DateTime.UtcNow)).ToUnixTimeMilliseconds(),
+        ["war_back"] = new DateTimeOffset(WarClock.BackAt(DateTime.UtcNow)).ToUnixTimeMilliseconds(),
         ["dungeon"] = Runner.Mode switch { RunMode.Den => "den", RunMode.Labyrinth => "labyrinth", _ => "attack" },
         ["runs"] = Runner.Runs,
         ["game"] = Capture.CanSee,
@@ -94,6 +98,10 @@ static class Remote
                 var a = c.TryGetProperty("args", out var args) ? args : default;
                 string d = a.ValueKind == JsonValueKind.Object && a.TryGetProperty("dungeon", out var dd) ? dd.GetString() ?? "" : "";
                 var mode = d == "den" ? RunMode.Den : d == "labyrinth" ? RunMode.Labyrinth : RunMode.Attack;
+                // 1.5.2: the website may also set the runs and the war break with Start
+                if (a.ValueKind == JsonValueKind.Object && a.TryGetProperty("runs", out var rr) && rr.ValueKind == JsonValueKind.Number) Runner.Runs = rr.GetInt32();
+                if (a.ValueKind == JsonValueKind.Object && a.TryGetProperty("war_break", out var wb) && (wb.ValueKind == JsonValueKind.True || wb.ValueKind == JsonValueKind.False)) Runner.WarBreak = wb.GetBoolean();
+                if (mode != RunMode.Attack) Runner.Mode = mode;
                 string? why = null;
                 var tcs = new TaskCompletionSource();
                 var svc = TapService.Instance;
@@ -118,6 +126,59 @@ static class Remote
                 msg = ok ? "return scroll pressed" : "the tap did not go through";
                 AppLog.Add("website: return to town" + (ok ? "" : " failed"));
                 break;
+            // 1.5.2: more from the website
+            case "set_mode":
+            {
+                var aa = c.TryGetProperty("args", out var x1) ? x1 : default;
+                string dm = aa.ValueKind == JsonValueKind.Object && aa.TryGetProperty("dungeon", out var d1) ? d1.GetString() ?? "" : "";
+                if (Runner.Running) { ok = false; msg = "stop the run first"; break; }
+                Runner.Mode = dm == "den" ? RunMode.Den : dm == "attack" ? RunMode.Attack : RunMode.Labyrinth;
+                ok = true; msg = "mode: " + Runner.ModeName(Runner.Mode);
+                AppLog.Add("website: " + msg);
+                break;
+            }
+            case "set_runs":
+            {
+                var aa = c.TryGetProperty("args", out var x2) ? x2 : default;
+                int n = aa.ValueKind == JsonValueKind.Object && aa.TryGetProperty("runs", out var r1) && r1.ValueKind == JsonValueKind.Number ? r1.GetInt32() : 0;
+                Runner.Runs = n;
+                ok = true; msg = "runs in a row: " + (n == 0 ? "until stopped" : n.ToString());
+                AppLog.Add("website: " + msg);
+                break;
+            }
+            case "war_break":
+            {
+                var aa = c.TryGetProperty("args", out var x3) ? x3 : default;
+                bool on = aa.ValueKind == JsonValueKind.Object && aa.TryGetProperty("on", out var o1) && o1.ValueKind == JsonValueKind.True;
+                Runner.WarBreak = on;
+                ok = true; msg = "war break " + (on ? "on" : "off") + (Runner.Running && on ? " (from the next run; at :27 it leaves the run that is going)" : "");
+                break;
+            }
+            case "auto_hunt":
+            {
+                var s3 = TapService.Instance;
+                var hb = BubbleLayout.Load().Find(BubbleKind.AutoHunt);
+                if (s3 == null || hb == null) { ok = false; msg = hb == null ? "no Auto hunt bubble placed" : "the tap permission is off"; break; }
+                if (Runner.Running) { ok = false; msg = "stop the run first"; break; }
+                var (w3, h3) = s3.ScreenSize();
+                var (x3b, y3b) = BubbleLayout.Load().At(hb, w3, h3);
+                ok = await s3.PressAsync(x3b, y3b, 80);
+                msg = ok ? "auto hunt pressed" : "the tap did not go through";
+                AppLog.Add("website: auto hunt pressed");
+                break;
+            }
+            case "check_phone":
+            {
+                var s4 = TapService.Instance;
+                if (s4 == null) { ok = false; msg = "the tap permission is off"; break; }
+                if (Runner.Running) { ok = false; msg = "stop the run first"; break; }
+                AppLog.Add("website: check phone");
+                string res = await PhoneCheck.RunAsync(s4, CancellationToken.None);
+                ok = res.StartsWith("This phone is ready");
+                msg = res.Replace("\n", " · ");
+                if (msg.Length > 190) msg = msg.Substring(0, 190) + "…";
+                break;
+            }
             default:
                 ok = false; msg = "this app version doesn't know \"" + cmd + "\"";
                 break;

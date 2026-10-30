@@ -344,6 +344,26 @@ sealed class Nav
         AppLog.Add($"camera: close enough ({(int)Forward}°), going on");
     }
 
+    /// <summary>1.5.2 (the phone check): turns the view about <paramref name="deg"/>°, measures it, and turns it back. Null when it can't measure.</summary>
+    public async Task<double?> TestTurnAsync(double deg, CancellationToken ct)
+    {
+        var (sw, sh) = svc.ScreenSize();
+        string key = $"cam_deg_per_px_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}";
+        double perPx = Prefs.GetFloat(key, Prefs.GetFloat("cam_deg_per_px", 0));
+        if (Math.Abs(perPx) < 0.01) perPx = 0.15;
+        double before = Forward;
+        float px = (float)(deg / perPx);
+        await TurnAsync(px, ct);
+        await Task.Delay(250, ct);
+        if (!await CalibrateAsync(ct)) return null;
+        double got = Norm(Forward - before);
+        if (Math.Abs(got) >= 15) Prefs.Edit()!.PutFloat(key, (float)(got / px))!.Apply();
+        await TurnAsync(-px, ct);
+        await Task.Delay(250, ct);
+        await CalibrateAsync(ct);
+        return got;
+    }
+
     /// <summary>
     /// Turns the view like a thumb would: one smooth, slightly curved drag across the camera area (long turns in two or three drags),
     /// slower for longer drags.
@@ -435,14 +455,14 @@ sealed class Nav
     /// Walks to (x, y) until within <paramref name="tol"/> map units. Returns true when there, false when it gave up (stuck, can't read
     /// the position, or out of time).
     /// </summary>
-    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true)
+    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true, bool quiet = false)
     {
         if (!known && !await CalibrateAsync(ct)) return false;
         var start = DateTime.UtcNow;
         var p = await ReadAsync(ct);
         if (!p.Ok) return false;
         if (p.Dist(x, y) <= tol) return true;
-        AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
+        if (!quiet) AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
         var history = new List<(DateTime t, double d)>();
         int detours = 0, misses = 0, flips = 0, jumps = 0;
         bool rechecked = false, canMove = false;
@@ -461,7 +481,7 @@ sealed class Nav
                 ct.ThrowIfCancellationRequested();
                 if ((DateTime.UtcNow - start).TotalSeconds > maxSecs) { AppLog.Add("walk: out of time"); return false; }
                 double dist = p.Dist(x, y);
-                if (dist <= tol) { AppLog.Add($"walk: there ({p})"); return true; }
+                if (dist <= tol) { if (!quiet) AppLog.Add($"walk: there ({p})"); return true; }
 
                 // steer straight at the target (or the detour angle for a moment)
                 double want = MapAngle(x - p.X, y - p.Y);
@@ -593,9 +613,15 @@ sealed class Nav
             var q = path[i];
             if (Math.Sqrt(Math.Pow(q.x - lastLeg.x, 2) + Math.Pow(q.y - lastLeg.y, 2)) >= 300) { legs.Add(q); lastLeg = q; }
         }
-        AppLog.Add($"walk: following the recorded way ({legs.Count} points)");
+        AppLog.Add($"walk: following the recorded way ({legs.Count} points, from {p})");
+        // 1.5.2: the PC's recorded paths (Assets/routes.json): point by point without letting go of the stick; a point that can't be
+        // reached is skipped (twice at most), then the rest is walked straight
+        int failed = 0;
         foreach (var q in legs)
-            if (!await WalkToAsync(q.x, q.y, 160, ct, 40, release: false)) { await stick.ReleaseAsync(); return await WalkToAsync(x, y, tol, ct); }
+        {
+            if (await WalkToAsync(q.x, q.y, 160, ct, 40, release: false, quiet: true)) continue;
+            if (++failed > 2) { await stick.ReleaseAsync(); AppLog.Add("walk: off the recorded way - straight to the spot"); return await WalkToAsync(x, y, tol, ct); }
+        }
         return await WalkToAsync(x, y, tol, ct);
     }
 

@@ -83,6 +83,7 @@ sealed class Overlay
     TextView? sub, hpText, posText, logText, totals, runsText, screenNote;
     HpBar? hpBar;
     LinearLayout? runsRow;
+    Button? warBtn;
     Button? screenBtn;
     readonly Dictionary<RunMode, Button> modeBtns = new();
     bool ticking;
@@ -151,6 +152,9 @@ sealed class Overlay
         runsRow.AddView(Ui.Button(c, "−", false, () => Runner.Runs = Runner.Runs - 1, 12));
         runsRow.AddView(Ui.Button(c, "+", false, () => Runner.Runs = Runner.Runs + 1, 12));
         panel.AddView(runsRow, Ui.Wide());
+        // 1.5.2: the war break (Labyrinth / Den): leave for the war at :27 of every war hour, back after it
+        warBtn = Ui.Button(c, "War break: off", false, () => Runner.WarBreak = !Runner.WarBreak, 11);
+        panel.AddView(warBtn, Ui.Wide());
         totals = Ui.Text(c, "", 10, Ui.Muted);
         panel.AddView(totals);
         detail = Ui.Text(c, "", 11, Ui.Muted);
@@ -159,7 +163,8 @@ sealed class Overlay
         var row1 = Ui.Row(c, 6);
         startStop = Ui.Button(c, "Start", true, () => { if (Runner.Running) Runner.Stop("Stopped."); else StartRun(); }, 12);
         row1.AddView(startStop, Ui.Weight());
-        row1.AddView(Ui.Button(c, "Camera fix", false, () => _ = CameraFix(), 12), Ui.Weight());
+        // 1.5.2: "Check phone" (the one-tap set-up check) instead of the old camera fix
+        row1.AddView(Ui.Button(c, "Check phone", false, () => _ = CheckPhone(), 12), Ui.Weight());
         panel.AddView(row1, Ui.Wide());
         var row2 = Ui.Row(c, 6);
         row2.AddView(Ui.Button(c, "Bubbles", false, OpenEditor, 12), Ui.Weight());
@@ -224,6 +229,24 @@ sealed class Overlay
         svc.Main.Post(Refresh);
     }
 
+    async Task CheckPhone()
+    {
+        if (Runner.Running) { AppLog.Add("check: stop the run first"); return; }
+        if (PhoneCheck.Running) return;
+        if (!License.Allowed()) { AppLog.Add("check: " + License.Why()); return; }
+        // the panel must not catch the steps and drags: fold it, open it again with the result
+        if (panelBox != null) panelBox.Visibility = ViewStates.Gone;
+        string result = await PhoneCheck.RunAsync(svc, CancellationToken.None);
+        svc.Main.Post(() =>
+        {
+            if (panelBox != null) panelBox.Visibility = ViewStates.Visible;
+            if (detail != null) { detail.Text = result; detail.SetTextColor(result.StartsWith("This phone is ready") ? Android.Graphics.Color.Rgb(120, 220, 140) : Ui.Gold); }
+            checkShownUntil = DateTime.UtcNow.AddSeconds(60);
+        });
+    }
+
+    DateTime checkShownUntil = DateTime.MinValue;
+
     void ToggleScreen()
     {
         if (Capture.On) CaptureService.StopSharing(c);
@@ -285,6 +308,15 @@ sealed class Overlay
             detail.Text = Runner.StatusLine();
             ShowMarkers();
         }
+        else if (PhoneCheck.Running || DateTime.UtcNow < checkShownUntil)
+        {
+            // the phone check is running, or its result stays on the panel for a minute
+            title.Text = PhoneCheck.Running ? "CHECKING THIS PHONE…" : "PHONE CHECK";
+            title.SetTextColor(Color.White);
+            startStop.Text = "Start";
+            if (PhoneCheck.Running) detail.Text = string.Join("\n", AppLog.Last(3));
+            else detail.SetTextColor(detail.Text!.StartsWith("This phone is ready") ? Color.Rgb(120, 220, 140) : Ui.Gold);
+        }
         else
         {
             title.Text = "READY";
@@ -300,6 +332,13 @@ sealed class Overlay
         foreach (var (m, b) in modeBtns)
             b.Background = m == mode ? Ui.Round(c, Ui.Red, 9) : Ui.Round(c, Color.Transparent, 9, Color.ParseColor("#3A3A40"));
         if (runsRow != null) runsRow.Visibility = mode == RunMode.Attack ? ViewStates.Gone : ViewStates.Visible;
+        if (warBtn != null)
+        {
+            warBtn.Visibility = mode == RunMode.Attack ? ViewStates.Gone : ViewStates.Visible;
+            var nb = WarClock.NextBreak(DateTime.UtcNow).ToLocalTime();
+            warBtn.Text = Runner.WarBreak ? (Runner.OnWarBreak ? "War break: ON · on the war now" : $"War break: ON · next {nb:HH:mm}") : "War break: off (tap to turn on)";
+            warBtn.SetTextColor(Runner.WarBreak ? Ui.Gold : Color.White);
+        }
         if (runsText != null) runsText.Text = "Runs in a row: " + (Runner.Runs == 0 ? "0 (until stopped)" : Runner.Runs.ToString());
         if (totals != null) totals.Text = "Done on this phone: Labyrinth " + Runner.TotalLabyrinth + " · Den " + Runner.TotalDen;
         if (logText != null) logText.Text = string.Join("\n", AppLog.Last(4));
