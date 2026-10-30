@@ -70,6 +70,7 @@ static class RunEngine
         bool den = mode == RunMode.Den;
         AppLog.Add("phone: " + AppLog.Device());
         countdownDone = false;
+        restartAtOne = false;                                 // 1.5.3: a kick from an earlier, stopped run doesn't count
         // 1.4.9: no need to tap Live record first: on a phone that can only see the game through screen sharing (Android 9 and 10,
         // emulators) the run asks Android for it by itself and starts as soon as it is allowed
         if (!Capture.CanSee)

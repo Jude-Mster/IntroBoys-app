@@ -439,7 +439,9 @@ sealed class Nav
                     waiting = true;
                     AppLog.Add("gate: shut, waiting for it to open");
                 }
-                if (waiting) { await stick.ReleaseAsync(); await Task.Delay(1000, ct); }
+                // 1.5.3: keeps pushing toward the gate while it waits (it used to let go and push only for a moment between looks: on a
+                // slow phone that moment moved the character too little to notice the gate had opened, and it waited on and on)
+                if (waiting) await Task.Delay(Slow ? 700 : 400, ct);
             }
             AppLog.Add("gate: didn't get through in time");
             return false;
@@ -473,7 +475,9 @@ sealed class Nav
         double detour = 0;
         DateTime detourUntil = DateTime.MinValue;
         Position prev = p;
-        double prevStick = double.NaN;
+        double prevStick = double.NaN, bigChange = 0;
+        Position oddOne = default;
+        var prevAt = DateTime.UtcNow;
         try
         {
             while (true)
@@ -487,6 +491,9 @@ sealed class Nav
                 double want = MapAngle(x - p.X, y - p.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
+                // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
+                // corrections made the run weave, most of all on slow phones where they arrive late)
+                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : 6)) s = prevStick;
                 // read the position while the stick is being pushed
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
@@ -495,6 +502,14 @@ sealed class Nav
                 long seenAt = Screen.LastFrameAt;
                 var np = await Screen.PositionAsync();
                 if (Screen.LastFrameAt == seenAt) { await Task.Delay(60, ct); continue; }      // the same picture: no news
+                // 1.5.3: a reading that jumped further than the character can run since the last one is a misread (a dropped or
+                // swapped digit on a small screen); it is skipped unless the next reading agrees with it
+                double maxRun = 260 + 320 * Math.Max(0.3, (DateTime.UtcNow - prevAt).TotalSeconds);
+                if (np.Ok && np.Dist(prev.X, prev.Y) > maxRun && np.Dist(prev.X, prev.Y) <= 3000)
+                {
+                    if (!(oddOne.Ok && np.Dist(oddOne.X, oddOne.Y) < 120)) { oddOne = np; continue; }
+                }
+                oddOne = default;
                 if (!np.Ok || np.Dist(prev.X, prev.Y) > 3000)
                 {
                     // 1.3.7: a far jump that the map title agrees with is no misread: the character is somewhere else now (died, kicked)
@@ -508,7 +523,8 @@ sealed class Nav
 
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
-                if (moved > 60 && !double.IsNaN(prevStick) && Math.Abs(Norm(prevStick - s)) < 12)
+                // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
+                if (moved > (Slow ? 120 : 60) && !double.IsNaN(prevStick) && Math.Abs(Norm(prevStick - s)) < 12)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
                     // turned well away from "up" and the character went the mirrored way: the stick turns the other way round
@@ -526,10 +542,14 @@ sealed class Nav
                         }
                     }
                     double newOff = Norm(seen - hand * s);
-                    off = Norm(off + Norm(newOff - off) * 0.5);
+                    // 1.5.3: one odd stretch (a bump, a misread) does not swing the direction: a big change needs two in a row
+                    double change = Norm(newOff - off);
+                    if (Math.Abs(change) > 45 && !(bigChange != 0 && Math.Sign(bigChange) == Math.Sign(change))) bigChange = change;
+                    else { off = Norm(off + change * (Slow ? 0.3 : 0.5)); bigChange = 0; }
                 }
                 prevStick = s;
                 prev = np;
+                prevAt = DateTime.UtcNow;
                 p = np;
 
                 // 1.4.0: a detour that has just ended and got the character clearly on its way: remember it for this place
