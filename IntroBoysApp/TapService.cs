@@ -230,6 +230,9 @@ public class TapService : AccessibilityService
     }
 
     /// <summary>Sends a gesture built by the caller (the move pad's held stick, Nav.cs). False when it was cancelled or refused.</summary>
+    /// <summary>1.5.6: folds the floating panel if it lies over (x, y), before a touch of the run starts there.</summary>
+    public void Uncover(float x, float y) => Main.Post(() => Overlay?.FoldIfCovers(x, y));
+
     public Task<bool> DispatchAsync(Func<GestureDescription> build, long ms)
     {
         License.Require();

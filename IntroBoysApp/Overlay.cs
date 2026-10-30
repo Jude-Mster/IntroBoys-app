@@ -71,6 +71,12 @@ sealed class Overlay
         return x >= at[0] && x < at[0] + v.Width && y >= at[1] && y < at[1] + v.Height;
     }
 
+    /// <summary>1.5.6: a touch of the run is about to start at (x, y): an open panel there is folded first. Main thread.</summary>
+    public void FoldIfCovers(float x, float y)
+    {
+        if (panelBox != null && panelBox.Visibility == ViewStates.Visible && Covers(x, y)) panelBox.Visibility = ViewStates.Gone;
+    }
+
     public void CloseAll()
     {
         CloseEditor();
@@ -186,6 +192,10 @@ sealed class Overlay
             scroller.Visibility = scroller.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
             Refresh();
             if (scroller.Visibility == ViewStates.Visible) Tick();
+            // 1.5.6: opened during a run: it folds away by itself after 8 s (an open panel lay over the move pad: the run's touches
+            // landed on it instead of the game - the character stopped, and a touch on its Stop button stopped the run)
+            if (scroller.Visibility == ViewStates.Visible && Runner.Running && Runner.RunningMode != RunMode.Attack)
+                svc.Main.PostDelayed(() => { if (Runner.Running && panelBox != null) panelBox.Visibility = ViewStates.Gone; }, 8000);
         });
         control = root;
         panelBox = scroller;

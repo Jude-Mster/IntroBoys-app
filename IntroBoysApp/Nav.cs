@@ -59,6 +59,7 @@ sealed class Stick
             float tx = wantX, ty = wantY;
             var prev = held;
             float fx = prev == null ? cx : atX, fy = prev == null ? cy : atY;
+            if (prev == null) svc.Uncover(cx, cy);                // 1.5.6: never start the touch on the floating panel
             // the same spot again: a 1-pixel wiggle (a piece must move a little)
             if (Math.Abs(tx - fx) < 1 && Math.Abs(ty - fy) < 1) { wiggle = !wiggle; tx = fx + (wiggle ? 1 : -1); }
             GestureDescription.StrokeDescription? stroke = null;
@@ -97,6 +98,18 @@ sealed class Stick
             for (int i = 0; i < 300; i++) path.LineTo(tx + (i % 2 == 0 ? 2 : 0), ty);       // reach the edge fast, then stay
             return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, Math.Max(1, ms)))!.Build()!;
         }, ms);
+    }
+
+    /// <summary>
+    /// 1.5.6: a fresh touch on the move pad: the member tapped the screen (Android then drops the run's held touch, or the game stops
+    /// following it) and the character stood still. The next piece starts a new touch from the middle.
+    /// </summary>
+    public async Task RetouchAsync()
+    {
+        bool was = want;
+        float x = wantX, y = wantY;
+        await ReleaseAsync();
+        if (was) { wantX = x; wantY = y; want = true; pumping = new CancellationTokenSource(); var t = pumping.Token; pump = Task.Run(() => Pump(t)); }
     }
 
     /// <summary>Lets go of the stick: drags back to the middle and lifts.</summary>
@@ -486,6 +499,8 @@ sealed class Nav
         double prevStick = double.NaN, bigChange = 0;
         Position oddOne = default;
         var prevAt = DateTime.UtcNow;
+        DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
+        int retouches = 0;
         try
         {
             while (true)
@@ -528,6 +543,16 @@ sealed class Nav
                 }
                 misses = 0;
                 last = np;
+
+                // 1.5.6: standing still for a second and a half while the stick is held (a tap on the screen broke the touch): touch the
+                // move pad again before anything else
+                if (np.Dist(prev.X, prev.Y) > 25) lastMoveAt = DateTime.UtcNow;
+                else if ((DateTime.UtcNow - lastMoveAt).TotalSeconds > (Slow ? 2.0 : 1.4) && (DateTime.UtcNow - lastRetouch).TotalSeconds > 3)
+                {
+                    lastRetouch = DateTime.UtcNow;
+                    if (++retouches <= 3 || retouches % 10 == 0) AppLog.Add("walk: not moving - touching the move pad again");
+                    await stick.RetouchAsync();
+                }
 
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
