@@ -16,10 +16,12 @@
     <ApplicationTitle>BLACKLIST</ApplicationTitle>
     <!-- The build sets the number from the GitHub run, so every build installs over the last one. -->
     <ApplicationVersion Condition="'$(ApplicationVersion)' == ''">1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.4.6</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>1.4.7</ApplicationDisplayVersion>
 
     <AndroidPackageFormat>apk</AndroidPackageFormat>
-    <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
+    <!-- 1.4.7: also Intel/AMD (x86_64, x86): PC emulators like LDPlayer run Android on x86, and with only ARM code inside the app
+         closed at once there ("BLACKLIST keeps stopping") -->
+    <RuntimeIdentifiers>android-arm64;android-arm;android-x86_64;android-x86</RuntimeIdentifiers>
     <!-- JSON is read and written by hand (JsonDocument / Utf8JsonWriter), so trimming is safe -->
     <TrimMode>partial</TrimMode>
   </PropertyGroup>
