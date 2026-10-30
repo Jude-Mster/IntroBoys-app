@@ -233,6 +233,7 @@ static class RunEngine
         Runner.SetPhase("finding the gate");
         await Task.Delay(1200, ct);
         await nav.ZoomOutAsync(ct);
+        nav.Forget();                                         // 1.5.4: the camera starts afresh after every teleport
         var p = await nav.ReadAsync(ct);
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
@@ -251,7 +252,10 @@ static class RunEngine
             }
         }
         Runner.SetPhase("through the gate");
-        await nav.GateAsync(tx, ty, 300, ct);
+        // 1.5.4: the Labyrinth's gate is at about y 33460, some 700 from where you arrive (3595 , 34153). "Through" used to be 300 on the
+        // way - still in front of the gate - so on every run but the first (no countdown wait) it ran into the shut gate and walked round
+        // it in circles. Now it pushes at the gate until it is really past it (y under 33380), however long the gate takes to open.
+        await nav.GateAsync(tx, ty, den ? 300 : Math.Max(300, p.Y - 33380), ct, 75);
     }
 
     // ------------------------------------------------------------------ one boss
@@ -274,6 +278,10 @@ static class RunEngine
         }
         for (int tries = 0; tries < 4; tries++)
         {
+            // 1.5.4: never walk to a boss outside the dungeon (it tried to walk to boss 1 in town, 11000 away)
+            var here0 = await nav.ReadAsync(ct, 2);
+            var pl0 = Screen.PlaceOf(here0);
+            if (pl0 != Place.Unknown && pl0 != Target(den) && await OutsideAsync(nav, den, ct)) return false;
             var way = Route(routeIndex);
             if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
             var p = nav.Last;
@@ -325,8 +333,14 @@ static class RunEngine
             await LootAsync(svc, layout, ct);
             if (!den) break;                    // the LOD boss may come back: watch a few seconds more
         }
-        // 1.4.0: straight on to the next boss after the kill (the walk itself notices a map change; this was up to 4 s more)
-        return fights > 0 || !await OutsideAsync(nav, den, ct);
+        // 1.5.4: after the kill one quick look where the character is (a death in the fight wakes it up in town - it walked on to the
+        // next boss in town); the full check only when that look says it is not in the dungeon
+        if (fights > 0)
+        {
+            var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
+            return pl == Target(den) || pl == Place.Unknown || !await OutsideAsync(nav, den, ct);
+        }
+        return !await OutsideAsync(nav, den, ct);
     }
 
     /// <summary>

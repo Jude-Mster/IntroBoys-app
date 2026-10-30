@@ -155,6 +155,14 @@ sealed class Nav
     // 1.4.0: where a detour last got round a wall, and which way (kept while the app runs)
     static Position goodAt;
     static double goodDetour;
+    static (int x, int y) goodFor;
+
+    /// <summary>
+    /// 1.5.4: after a teleport the game puts the camera back where it always starts (about 130° on the map), so what was measured before
+    /// no longer holds: it is measured again. (Run 2 and later used the old direction: "looking at the gate" without turning, then ran
+    /// the wrong way and never got through the gate.) The remembered detours belong to the last run too.
+    /// </summary>
+    public void Forget() { known = false; goodAt = default; }
 
     static double Norm(double a) { a %= 360; if (a > 180) a -= 360; if (a < -180) a += 360; return a; }
     static double MapAngle(int dx, int dy) => Math.Atan2(dy, dx) * 180 / Math.PI;
@@ -555,7 +563,7 @@ sealed class Nav
                 // 1.4.0: a detour that has just ended and got the character clearly on its way: remember it for this place
                 if (detourFrom.Ok && DateTime.UtcNow >= detourUntil)
                 {
-                    if (detourDist - p.Dist(x, y) > 150 || p.Dist(detourFrom.X, detourFrom.Y) > 250) { goodAt = detourFrom; goodDetour = detour; }
+                    if (detourDist - p.Dist(x, y) > 150 || p.Dist(detourFrom.X, detourFrom.Y) > 250) { goodAt = detourFrom; goodDetour = detour; goodFor = (x, y); }
                     detourFrom = default;
                 }
 
@@ -567,7 +575,8 @@ sealed class Nav
                     if (++detours > 10) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
                     // 1.4.0: a detour that got round this wall before (the same place) is tried first, straight away
-                    if (detours == 1 && goodAt.Ok && p.Dist(goodAt.X, goodAt.Y) < 900)
+                    // (1.5.4: only on the way to the same place - a detour that helped on another way sent it the wrong way)
+                    if (detours == 1 && goodAt.Ok && p.Dist(goodAt.X, goodAt.Y) < 900 && goodFor == (x, y))
                     {
                         detour = goodDetour;
                         detourUntil = DateTime.UtcNow.AddMilliseconds(1800);
