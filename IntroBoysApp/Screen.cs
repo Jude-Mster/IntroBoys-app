@@ -25,7 +25,9 @@ public readonly record struct Position(bool Ok, int X, int Y, string Map, string
 /// </summary>
 static class Screen
 {
-    static readonly Regex Coord = new(@"(\d{2,5})\s*[,.;:]\s*(\d{2,5})", RegexOptions.Compiled);
+    // 1.5.5: "x , y" only with a comma or a dot, and 3-5 digits each: the clock at the top ("13:41:26") was read as the position 13 , 41
+    // on the cloud phone, so nothing seemed to move (the move pad check failed and the camera was never turned)
+    static readonly Regex Coord = new(@"(?<![\d:])(\d{3,5})\s*[,.]\s*(\d{3,5})(?![\d:])", RegexOptions.Compiled);
     static Context C => Android.App.Application.Context;
 
     public static Position LastPos { get; private set; }
@@ -166,11 +168,18 @@ static class Screen
         {
             var m = Coord.Match(Clean(l.Text));
             if (!m.Success || !int.TryParse(m.Groups[1].Value, out int px) || !int.TryParse(m.Groups[2].Value, out int py)) continue;
+            if (px < 100 || py < 100) continue;                // "200.000" (a pet's numbers) is no position
             if (strict && (m.Groups[1].Value.Length < 3 || m.Groups[2].Value.Length < 3)) continue;
             cands.Add((l, px, py));
         }
         if (cands.Count == 0) return (new Position(false, 0, 0, "", ""), map);
         var pick = cands[0];
+        // 1.5.5: with a title read, the numbers right under it win (any other numbers in the part read are not the position)
+        if (!strict && title is TextLine tt)
+        {
+            var under = cands.Where(c => c.l.Y >= tt.Y && c.l.Y - tt.Y < tt.H * 6).OrderBy(c => c.l.Y - tt.Y).ToList();
+            if (under.Count > 0) pick = under[0];
+        }
         if (strict && title is TextLine t)
         {
             var below = cands.Where(c => c.l.Y >= t.Y && c.l.Y - t.Y < t.H * 6).OrderBy(c => Math.Abs(c.l.Cx - t.Cx) + (c.l.Y - t.Y)).ToList();
