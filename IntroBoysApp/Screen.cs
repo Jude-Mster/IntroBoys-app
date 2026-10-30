@@ -273,6 +273,26 @@ static class Screen
         return hp;
     }
 
+    /// <summary>
+    /// 1.5.1: how much yellow item-name text lies on the ground around the character: yellow pixels in the middle of the screen
+    /// (every 3rd pixel; the HUD, the chat and the mini-map are outside it). -1 when the screen can't be seen. Compared with the
+    /// same count taken at the start of the fight, so torches and the scenery don't count.
+    /// </summary>
+    public static async Task<int> GroundYellowAsync()
+    {
+        var f = await Capture.SnapAsync(C);
+        if (f == null) return -1;
+        int x0 = (int)(f.W * 0.18), x1 = (int)(f.W * 0.82), y0 = (int)(f.H * 0.22), y1 = (int)(f.H * 0.70);
+        int n = 0;
+        for (int y = y0; y < y1; y += 3)
+            for (int x = x0; x < x1; x += 3)
+            {
+                var (r, g, b) = f.Rgb(x, y);
+                if (r >= 175 && g >= 150 && b <= 110 && r - b >= 90 && Math.Abs(r - g) <= 70) n++;
+            }
+        return n;
+    }
+
     /// <summary>Lines of text in a part of the screen given as fractions of its size (the teleport list, buttons ...).</summary>
     public static async Task<List<TextLine>> TextAsync(double fx, double fy, double fw, double fh, int scale = 1)
     {

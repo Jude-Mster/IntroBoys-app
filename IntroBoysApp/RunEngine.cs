@@ -74,7 +74,7 @@ static class RunEngine
         // emulators) the run asks Android for it by itself and starts as soon as it is allowed
         if (!Capture.CanSee)
         {
-            Runner.SetPhase("asking Android to share the screen (tap Start now / Allow)");
+            Runner.SetPhase("asking Android to share the screen (tick \"Don't show again\", then Start now)");
             CaptureActivity.Request(Android.App.Application.Context);
             var until = DateTime.UtcNow.AddSeconds(45);
             while (!Capture.CanSee && DateTime.UtcNow < until) await Task.Delay(400, ct);
@@ -347,6 +347,7 @@ static class RunEngine
         double buffEvery = buffs.Count == 0 ? double.MaxValue : Math.Max(20, buffs.Min(b => b.Mode == PressMode.Repeat ? b.Every : 120));
         DateTime NextBuff() => buffs.Count == 0 ? DateTime.MaxValue : lastBuff == DateTime.MinValue ? DateTime.UtcNow.AddSeconds(buffEvery) : lastBuff.AddSeconds(buffEvery);
         var nextBuff = NextBuff();
+        lootBase = await Screen.GroundYellowAsync();          // 1.5.1: the ground before anything dropped (see LootAsync)
         // 1.3.8: what was seen of the bar is kept for the whole fight (it was forgotten after every check, so on a phone where the red is
         // hard to read the fight stopped every 5 s to look again - and one missed name made the run leave a living boss)
         double lo = 1, hi = 0;
@@ -375,7 +376,19 @@ static class RunEngine
                     try { await Task.Delay(200, watch.Token); } catch { return; }
                 }
             });
-            string? why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff, ct);
+            // 1.5.1: stop attacking the moment the bar is gone (half a second), not after the death has been made sure of: it kept
+            // swinging for several seconds at a boss that was already dead. If the bar comes back, the attack goes on at once.
+            bool GoneNow() => goneSince is DateTime gs && (DateTime.UtcNow - gs).TotalSeconds >= 0.5 && hi > 0;
+            string? why = null;
+            while (true)
+            {
+                why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff || GoneNow(), ct);
+                if (why != null || dead || DateTime.UtcNow >= nextBuff) break;
+                // the bar is gone: wait, without attacking, until the watcher is sure (dead) or the bar is back
+                var waitUntil = DateTime.UtcNow.AddSeconds(8);
+                while (!dead && goneSince != null && DateTime.UtcNow < waitUntil) await Task.Delay(100, ct);
+                if (dead || goneSince != null) break;
+            }
             watch.Cancel();
             try { await watcher; } catch { /* stopped */ }
             if (why != null && !dead) throw new Exception(why);
@@ -479,10 +492,37 @@ static class RunEngine
     }
 
     /// <summary>Loot right after the kill (the drops fall at once): the Auto loot bubble every 400 ms for about 3 seconds.</summary>
+    static int lootBase = -1;
+
+    /// <summary>
+    /// 1.5.1: loot only when something lies on the ground. The yellow item names around the character are counted and compared with
+    /// the count at the start of the fight; nothing new = no loot taps (it used to tap Auto loot 6 times after every kill). While
+    /// looting it looks again every second tap and stops once the names are gone. A screen that can't be seen loots as before.
+    /// </summary>
     static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct)
     {
+        var loot = layout.Find(BubbleKind.AutoLoot);
+        if (loot == null) return;
+        await Task.Delay(500, ct);                           // the drops show up a moment after the death
+        int now = await Screen.GroundYellowAsync();
+        if (now < 0 || lootBase < 0) { Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); return; }
+        int thr = 18 + lootBase / 4;
+        if (now <= lootBase + thr)
+        {
+            await Task.Delay(400, ct);
+            now = await Screen.GroundYellowAsync();          // one more look (the items may be a moment late)
+            if (now <= lootBase + thr) { AppLog.Add("loot: nothing on the ground"); return; }
+        }
         Runner.SetPhase("looting");
-        await Runner.LootBurstAsync(svc, layout, ct);       // 1.4.0: 6 taps (was 8) and no pause after: then straight to the next boss
+        var (w, h) = svc.ScreenSize();
+        var (x, y) = layout.At(loot, w, h);
+        for (int i = 1; i <= 10; i++)
+        {
+            await svc.PressAsync(x, y, 60);
+            await Task.Delay(340, ct);
+            if (i % 2 == 0 && (now = await Screen.GroundYellowAsync()) >= 0 && now <= lootBase + thr / 2) { AppLog.Add($"loot: picked up ({i} taps)"); return; }
+        }
+        AppLog.Add("loot: done (10 taps)");
     }
 
     /// <summary>
