@@ -271,7 +271,9 @@ public class TapService : AccessibilityService
                 var done = new TaskCompletionSource<Frame?>(TaskCreationOptions.RunContinuationsAsynchronously);
                 Main.Post(() =>
                 {
-                    try { TakeScreenshot(0, MainExecutor!, new Shot(done)); }
+                    // 1.5.7: the picture is copied on its own thread (it was the main thread: copying a whole screen 3 times a second held up
+                    // the move pad's touch pieces, the touch broke and the character ran in stops and starts)
+                    try { TakeScreenshot(0, ShotThread, new Shot(done)); }
                     catch { done.TrySetResult(null); }
                 });
                 f = await Task.WhenAny(done.Task, Task.Delay(2500)) == done.Task ? await done.Task : null;
@@ -283,6 +285,7 @@ public class TapService : AccessibilityService
     }
 
     static Java.Nio.ByteBuffer? copyBuf;
+    static readonly Java.Util.Concurrent.IExecutorService ShotThread = Java.Util.Concurrent.Executors.NewSingleThreadExecutor()!;
 
     sealed class Shot : Java.Lang.Object, ITakeScreenshotCallback
     {

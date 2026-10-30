@@ -16,7 +16,7 @@
     <ApplicationTitle>BLACKLIST</ApplicationTitle>
     <!-- The build sets the number from the GitHub run, so every build installs over the last one. -->
     <ApplicationVersion Condition="'$(ApplicationVersion)' == ''">1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.5.6</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>1.5.7</ApplicationDisplayVersion>
 
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <!-- 1.4.7: also Intel/AMD (x86_64, x86): PC emulators like LDPlayer run Android on x86, and with only ARM code inside the app

@@ -20,7 +20,7 @@ sealed class Stick
     Task? pump;
     // ms per continued piece of the touch. 1.4.5: 600 on a slow phone (the cloud phone): short pieces reached the game late there,
     // the held touch broke between them and the character ran in stops and starts
-    public long Piece = 220;
+    public long Piece = 400;      // 1.5.7: 400 (was 220): fewer pieces, fewer chances for the touch to break
     bool wiggle;
 
     public Stick(TapService svc, BubbleLayout layout)
@@ -156,7 +156,7 @@ sealed class Nav
         stick = new Stick(svc, layout);
         var (sw0, sh0) = svc.ScreenSize();
         Slow = Math.Min(sw0, sh0) <= 800 || Prefs.GetInt($"nav_step_ms_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", 320) > 320;
-        if (Slow) stick.Piece = 600;
+        if (Slow) stick.Piece = 800;
         hand = Prefs.GetInt("nav_hand", 0) is int hd && hd != 0 ? hd : 1;
     }
 
@@ -500,6 +500,7 @@ sealed class Nav
         Position oddOne = default;
         var prevAt = DateTime.UtcNow;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
+        Position moveAnchor = p;
         int retouches = 0;
         try
         {
@@ -546,8 +547,10 @@ sealed class Nav
 
                 // 1.5.6: standing still for a second and a half while the stick is held (a tap on the screen broke the touch): touch the
                 // move pad again before anything else
-                if (np.Dist(prev.X, prev.Y) > 25) lastMoveAt = DateTime.UtcNow;
-                else if ((DateTime.UtcNow - lastMoveAt).TotalSeconds > (Slow ? 2.0 : 1.4) && (DateTime.UtcNow - lastRetouch).TotalSeconds > 3)
+                // (1.5.7: measured from a fixed point, over 3 s: a slow phone's screen updates in jumps, and between two readings it can
+                // look still while it runs - each false "not moving" let go of the stick: stop, run, stop, run)
+                if (np.Dist(moveAnchor.X, moveAnchor.Y) > 60) { lastMoveAt = DateTime.UtcNow; moveAnchor = np; }
+                else if ((DateTime.UtcNow - lastMoveAt).TotalSeconds > 3.0 && (DateTime.UtcNow - lastRetouch).TotalSeconds > 5)
                 {
                     lastRetouch = DateTime.UtcNow;
                     if (++retouches <= 3 || retouches % 10 == 0) AppLog.Add("walk: not moving - touching the move pad again");
@@ -594,8 +597,10 @@ sealed class Nav
 
                 // stuck: not getting closer for about 2 seconds -> walk round it (left, right, further each time)
                 history.Add((DateTime.UtcNow, p.Dist(x, y)));
-                history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > 2.6);
-                if (DateTime.UtcNow > detourUntil && history.Count >= 4 && (DateTime.UtcNow - history[0].t).TotalSeconds > 2.0 && history[0].d - history[^1].d < 60)
+                // 1.5.7: a slow phone gets a longer look before "stuck" (its readings come in jumps)
+                double win = Slow ? 3.8 : 2.6;
+                history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > win);
+                if (DateTime.UtcNow > detourUntil && history.Count >= 4 && (DateTime.UtcNow - history[0].t).TotalSeconds > win - 0.6 && history[0].d - history[^1].d < 60)
                 {
                     if (++detours > 10) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
