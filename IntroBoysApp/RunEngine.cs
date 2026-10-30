@@ -70,7 +70,7 @@ static class RunEngine
         bool den = mode == RunMode.Den;
         AppLog.Add("phone: " + AppLog.Device());
         countdownDone = false;
-        if (!Capture.CanSee) throw new Exception("this phone (Android 10) needs Live record on to read the screen: tap Live record on the panel");
+        if (!Capture.CanSee) throw new Exception("this phone (Android 9 or 10) needs Live record on to read the screen: tap Live record on the panel");
         int kicks = 0;
         for (int run = 1; runs == 0 || run <= runs; run++)
         {

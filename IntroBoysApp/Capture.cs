@@ -198,7 +198,9 @@ public class CaptureService : Service
             .SetContentIntent(open)!
             .SetOngoing(true)!
             .Build()!;
-        StartForeground(41, n, ForegroundService.TypeMediaProjection);
+        // 1.4.8: Android 9 (PC emulators like LDPlayer) has no foreground service types
+        if (OperatingSystem.IsAndroidVersionAtLeast(29)) StartForeground(41, n, ForegroundService.TypeMediaProjection);
+        else StartForeground(41, n);
 
         int code = intent?.GetIntExtra("code", 0) ?? 0;
 #pragma warning disable CA1422, CS0618

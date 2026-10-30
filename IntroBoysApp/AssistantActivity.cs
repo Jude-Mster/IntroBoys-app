@@ -170,7 +170,7 @@ public class AssistantActivity : Activity
         setup.AddView(stepTaps.View, Ui.Wide());
         stepScreen = new Step(c, n++, "Live record (optional)",
             "Not needed to run: the Assistant reads the game through its taps permission. Live record (Android's screen sharing) makes the picture on " +
-            "the guild website's live view smoother, and is needed on Android 10. Android asks each time; pick \"Entire screen\".");
+            "the guild website's live view smoother, and is needed on Android 9 and 10. Android asks each time; pick \"Entire screen\".");
         stepScreen.AddButton("Allow", true, () => CaptureActivity.Request(this));
         stepScreen.AddButton("Stop", false, () => CaptureService.StopSharing(this));
         setup.AddView(stepScreen.View, Ui.Wide());

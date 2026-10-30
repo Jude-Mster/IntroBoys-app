@@ -250,7 +250,7 @@ public class TapService : AccessibilityService
 
     /// <summary>
     /// A picture of the whole screen through the accessibility service (Android allows about 3 a second, so a picture under 0.35 s old is
-    /// given again). Null on Android 10 or when Android refuses.
+    /// given again). Null on Android 9 and 10 or when Android refuses.
     /// </summary>
     internal async Task<Frame?> ShotAsync()
     {
