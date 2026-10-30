@@ -429,7 +429,7 @@ sealed class Editor
     /// <summary>Reads the boss HP bar in the box as it is placed now (needs screen sharing).</summary>
     void ReadBar()
     {
-        if (!Capture.CanSee) { barRead.Text = "The Assistant can't see the screen on this phone: tap Live record on the floating panel first."; return; }
+        if (!Capture.CanSee) { barRead.Text = "Asking Android to share the screen: allow it, then tap Read the bar now again."; CaptureActivity.Request(Android.App.Application.Context); return; }
         var (w, h) = svc.ScreenSize();
         var copy = layout.Copy();
         copy.ScreenW = w; copy.ScreenH = h;

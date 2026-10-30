@@ -70,7 +70,18 @@ static class RunEngine
         bool den = mode == RunMode.Den;
         AppLog.Add("phone: " + AppLog.Device());
         countdownDone = false;
-        if (!Capture.CanSee) throw new Exception("this phone (Android 9 or 10) needs Live record on to read the screen: tap Live record on the panel");
+        // 1.4.9: no need to tap Live record first: on a phone that can only see the game through screen sharing (Android 9 and 10,
+        // emulators) the run asks Android for it by itself and starts as soon as it is allowed
+        if (!Capture.CanSee)
+        {
+            Runner.SetPhase("asking Android to share the screen (tap Start now / Allow)");
+            CaptureActivity.Request(Android.App.Application.Context);
+            var until = DateTime.UtcNow.AddSeconds(45);
+            while (!Capture.CanSee && DateTime.UtcNow < until) await Task.Delay(400, ct);
+            if (!Capture.CanSee) throw new Exception("screen sharing wasn't allowed, so the run can't see the game - press Start again and tap Start now / Allow");
+            AppLog.Add("screen: shared - starting");
+            await Task.Delay(800, ct);
+        }
         int kicks = 0;
         for (int run = 1; runs == 0 || run <= runs; run++)
         {

@@ -309,7 +309,7 @@ sealed class Overlay
         if (posText != null) posText.Text = "where: " + Screen.PlaceText + " · position " + Screen.LastPos;
         if (screenNote != null)
         {
-            screenNote.Text = !Capture.CanSee ? "This phone needs Live record on to read the screen (Android 9 or 10)."
+            screenNote.Text = !Capture.CanSee ? "On this phone a run asks Android to share the screen when you press Start."
                             : !layout.Bubbles.Any(b => b.Kind == BubbleKind.BossBar) ? "Place the Boss HP bar box (Bubbles) for Labyrinth and Den runs." : "";
             screenNote.Visibility = screenNote.Text!.Length > 0 ? ViewStates.Visible : ViewStates.Gone;
         }
