@@ -411,10 +411,19 @@ static class RunEngine
                     var (hp, there) = await Screen.BossAsync(layout, hi > 0);
                     if (hp <= 0 && hi <= 0) there = false;            // never saw its red bar: text near the box isn't a boss
                     lastThere = there;
-                    if (there) { goneSince = null; if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; } }
+                    if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; }
+                    // 1.6.3: the game keeps the dead boss's name in the target box - only the name, no red, kept it "alive": it swung on at a
+                    // dead boss and stood there before walking on. On a phone that reads the red well (8+ red readings) a name without red
+                    // counts as gone after 1.2 s when the boss was nearly dead, 6 s otherwise - counted from the last red seen.
+                    if (there && hp <= 0 && redReads >= 8 && (DateTime.UtcNow - lastRed).TotalSeconds >= (lo <= LowHp ? 1.2 : 6.0))
+                    {
+                        there = false;
+                        goneSince ??= lastRed;
+                    }
+                    if (there) goneSince = null;
                     else goneSince ??= DateTime.UtcNow;
                     double secs = (DateTime.UtcNow - start).TotalSeconds;
-                    double need = lo <= 0.15 && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
+                    double need = lo <= LowHp && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
                     if (secs < 8) need = Math.Max(need, 5);
                     if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= need) { dead = true; return; }
                     if (secs > FightTimeout) { AppLog.Add($"{name}: fight took too long, going on"); dead = true; return; }
@@ -447,7 +456,7 @@ static class RunEngine
             // make sure: target once more and look again; a boss that is still there shows its bar or its name again.
             // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss.
             // 1.4.0: after a boss that was nearly dead the check is one quick look (it is over: on to the next boss at once), else three
-            bool nearlyDead = lo <= 0.15 && hi >= 0.30;
+            bool nearlyDead = lo <= LowHp && hi >= 0.30;
             await Press(svc, layout, BubbleKind.Target);
             await Task.Delay(nearlyDead ? 500 : 900, ct);
             bool alive = false, red = false; double hp2 = -1;
@@ -460,7 +469,7 @@ static class RunEngine
             // 1.4.0: only a name, no red, for a long time on a phone that reads the red well: the target key has picked something else
             // (yourself, a player) and the boss is gone - it stayed 2 minutes on a dead boss until the fight's time ran out
             double noRed = (DateTime.UtcNow - lastRed).TotalSeconds;
-            if (alive && !red && redReads >= 8 && noRed > (lo <= 0.15 ? 25 : 15))
+            if (alive && !red && redReads >= 8 && noRed > (lo <= LowHp ? 2 : 8))
             {
                 AppLog.Add($"{name}: only a name and no red bar for {noRed:0} s - counting it dead");
                 alive = false;
@@ -477,6 +486,9 @@ static class RunEngine
         if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("auto hunt: off"); }
         AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s)");
     }
+
+    /// <summary>1.6.3: the bar is "nearly empty" below this (0.15 missed the end of a boss that dies in a few big hits).</summary>
+    const double LowHp = 0.25;
 
     static DateTime lastBuff = DateTime.MinValue;
 
