@@ -238,10 +238,10 @@ static class RunEngine
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
-        if (!den && !countdownDone)
+        // 1.6.2: the gate opens 30 s after coming in - on EVERY run (every run is a Labyrinth of its own): wait it out, then run
+        if (!den)
         {
             countdownDone = true;
-            // the gate opens 30 s after coming in (the first run): wait it out, then run
             AppLog.Add("gate: waiting for the 30 s countdown");
             while (true)
             {

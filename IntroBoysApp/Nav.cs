@@ -573,6 +573,7 @@ sealed class Nav
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
+        DateTime lastTrace = DateTime.UtcNow;
         int retouches = 0;
         try
         {
@@ -586,6 +587,8 @@ sealed class Nav
                 // steer straight at the target (or the detour angle for a moment)
                 // 1.6.0: on a recorded way the stick aims at a point a little ahead on the way (the thumb stays down the whole way)
                 var (ax, ay) = aim != null ? aim(p) : (x, y);
+                // 1.6.2: where it is and where it aims, every 6 s (to see in the log which coordinate it follows)
+                if ((DateTime.UtcNow - lastTrace).TotalSeconds >= 6) { lastTrace = DateTime.UtcNow; AppLog.Add($"walk: at {p} → aiming at {ax} , {ay} ({(int)p.Dist(x, y)} to go)"); }
                 double want = MapAngle(ax - p.X, ay - p.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));

@@ -90,6 +90,9 @@ static class Screen
         if (numBox is { } nb && now0 - titleAt < 2500 && nb.x + nb.w <= f.W && nb.y + nb.h <= f.H)
         {
             var (pq, _) = ReadPos(await Ocr.ReadAsync(f, nb.x, nb.y, nb.w, nb.h, sc));
+            // 1.6.2: the numbers' line alone is trusted only when it agrees with the last whole reading: the same number of digits and
+            // within 1500 of it (a dropped first digit - "570 , 33372" - sent the walk toward a wrong place); else the whole corner is read
+            if (pq.Ok && LastPos.Ok && (Digits(pq.X) != Digits(LastPos.X) || Digits(pq.Y) != Digits(LastPos.Y) || pq.Dist(LastPos.X, LastPos.Y) > 1500)) pq = pq with { Ok = false };
             if (pq.Ok)
             {
                 posMisses = 0;
@@ -215,6 +218,7 @@ static class Screen
     }
 
     static TextLine? lastPick;
+    static int Digits(int v) => v.ToString().Length;
     // 1.5.9: the numbers' own line, padded (read alone it is a few times faster than the whole corner), and when the title was last read
     static (int x, int y, int w, int h)? numBox;
     static long titleAt;
