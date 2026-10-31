@@ -525,7 +525,8 @@ sealed class Nav
     /// Walks to (x, y) until within <paramref name="tol"/> map units. Returns true when there, false when it gave up (stuck, can't read
     /// the position, or out of time).
     /// </summary>
-    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true, bool quiet = false)
+    public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true, bool quiet = false,
+                                        Func<Position, (int x, int y)>? aim = null)
     {
         if (!known && !await CalibrateAsync(ct)) return false;
         var start = DateTime.UtcNow;
@@ -560,7 +561,9 @@ sealed class Nav
                 if (dist <= tol) { if (!quiet) AppLog.Add($"walk: there ({p})"); return true; }
 
                 // steer straight at the target (or the detour angle for a moment)
-                double want = MapAngle(x - p.X, y - p.Y);
+                // 1.6.0: on a recorded way the stick aims at a point a little ahead on the way (the thumb stays down the whole way)
+                var (ax, ay) = aim != null ? aim(p) : (x, y);
+                double want = MapAngle(ax - p.X, ay - p.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
@@ -725,26 +728,23 @@ sealed class Nav
     public async Task<bool> FollowAsync(IReadOnlyList<(int x, int y)> path, int x, int y, double tol, CancellationToken ct)
     {
         var p = await ReadAsync(ct);
-        if (!p.Ok || path.Count == 0) return await WalkToAsync(x, y, tol, ct);
-        // the nearest point of the path, then every ~300 units after it
-        int from = Enumerable.Range(0, path.Count).OrderBy(i => p.Dist(path[i].x, path[i].y)).First();
-        var legs = new List<(int x, int y)>();
-        var lastLeg = path[from];
-        for (int i = from + 1; i < path.Count; i++)
+        if (!p.Ok || path.Count < 2) return await WalkToAsync(x, y, tol, ct);
+        // 1.6.0: one walk, one held touch, for the whole recorded way: the stick always aims at the point of the way about 300 ahead of
+        // the character (it used to stop and start a new walk at every point, every ~300). Where the character is off the way, it aims
+        // at the nearest point ahead, so it comes back onto the way; near the end it aims at the spot itself.
+        int idx = Enumerable.Range(0, path.Count).OrderBy(i => p.Dist(path[i].x, path[i].y)).First();
+        double D(Position q, (int x, int y) a) => Math.Sqrt(Math.Pow(q.X - a.x, 2) + Math.Pow(q.Y - a.y, 2));
+        (int x, int y) Aim(Position q)
         {
-            var q = path[i];
-            if (Math.Sqrt(Math.Pow(q.x - lastLeg.x, 2) + Math.Pow(q.y - lastLeg.y, 2)) >= 300) { legs.Add(q); lastLeg = q; }
+            int best = idx; double bd = D(q, path[idx]);
+            for (int j = idx + 1; j < Math.Min(path.Count, idx + 60); j++) { double d = D(q, path[j]); if (d < bd) { bd = d; best = j; } }
+            idx = best;
+            for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= 300) return path[j];
+            return (x, y);
         }
-        AppLog.Add($"walk: following the recorded way ({legs.Count} points, from {p})");
-        // 1.5.2: the PC's recorded paths (Assets/routes.json): point by point without letting go of the stick; a point that can't be
-        // reached is skipped (twice at most), then the rest is walked straight
-        int failed = 0;
-        foreach (var q in legs)
-        {
-            if (await WalkToAsync(q.x, q.y, 160, ct, 40, release: false, quiet: true)) continue;
-            if (++failed > 2) { await stick.ReleaseAsync(); AppLog.Add("walk: off the recorded way - straight to the spot"); return await WalkToAsync(x, y, tol, ct); }
-        }
-        return await WalkToAsync(x, y, tol, ct);
+        if (D(p, path[idx]) > 1200) { AppLog.Add($"walk: {p} is far from the recorded way - straight to the spot"); return await WalkToAsync(x, y, tol, ct); }
+        AppLog.Add($"walk: following the recorded way ({path.Count - idx} points, from {p})");
+        return await WalkToAsync(x, y, tol, ct, 150, aim: Aim);
     }
 
     /// <summary>A few steps backwards (away from what the camera looks at): room to buff.</summary>

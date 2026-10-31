@@ -282,7 +282,8 @@ static class RunEngine
             var here0 = await nav.ReadAsync(ct, 2);
             var pl0 = Screen.PlaceOf(here0);
             if (pl0 != Place.Unknown && pl0 != Target(den) && await OutsideAsync(nav, den, ct)) return false;
-            var way = Route(routeIndex);
+            // 1.6.0: the PC's recorded ways between the bosses (not the first one, from the entrance: that is walked straight)
+            var way = routeIndex >= 1 ? Route(routeIndex) : new List<(int x, int y)>();
             if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
             var p = nav.Last;
             if (await OutsideAsync(nav, den, ct)) return false;

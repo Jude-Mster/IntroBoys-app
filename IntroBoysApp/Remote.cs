@@ -26,10 +26,13 @@ static class Remote
         double lastPic = 0;
         while (true)
         {
-            int wait = 20000;
+            // 1.6.0: a report every 8 s (was 20: the site counts an app offline after 25 s without one, so one slow or lost report made it
+            // flicker offline); a failed report is tried again after 4 s; commands run on their own (a long one - the phone check - no
+            // longer holds up the reports); the report goes out whenever the app is signed in, not only while the license check is fresh
+            int wait = 8000;
             try
             {
-                if (License.State == LicenseState.Licensed)
+                if (License.State != LicenseState.SignedOut)
                 {
                     var body = new Dictionary<string, object?> { ["state"] = State(), ["log"] = AppLog.Last(20) };
                     List<Dictionary<string, object?>> done;
@@ -48,13 +51,14 @@ static class Remote
                         lock (gate) foreach (var x in done) results.Remove(x);
                         Watching = root.TryGetProperty("watching", out var w) && w.ValueKind == JsonValueKind.True;
                         if (root.TryGetProperty("commands", out var cmds) && cmds.ValueKind == JsonValueKind.Array)
-                            foreach (var cmd in cmds.EnumerateArray()) await Handle(cmd);
+                            foreach (var cmd in cmds.EnumerateArray()) { var one = cmd.Clone(); _ = Task.Run(() => Handle(one)); }
+                        wait = Watching ? 3000 : 8000;
                     }
-                    wait = Watching ? 3000 : 20000;
+                    else wait = 4000;
                 }
                 else Watching = false;
             }
-            catch { wait = 15000; }
+            catch { wait = 4000; }
             await Task.Delay(wait);
         }
     }
