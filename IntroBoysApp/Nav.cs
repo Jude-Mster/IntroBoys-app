@@ -58,24 +58,33 @@ sealed class Stick
     /// stick was "held"). Remembered per screen.
     /// </summary>
     public bool Single;
-    const long SinglePush = 1500;
+    const long LongPush = 10000;
+    volatile bool longActive;
 
     async Task Pump(CancellationToken ct)
     {
+        // 1.6.1: on a slow phone ONE long touch (finger down in the middle, out to the edge, held up to 10 s) - a new touch only when the
+        // direction really changes or the 10 s are up. (1.5.8's 1.5-second pushes, and the touch continued piece by piece before, both
+        // made the cloud phone stop and go.)
         while (!ct.IsCancellationRequested && Single)
         {
             float sx = wantX, sy = wantY;
             svc.Uncover(cx, cy);
-            bool done = await svc.DispatchAsync(() =>
+            longActive = true;
+            var t = svc.DispatchAsync(() =>
             {
                 var path = new Android.Graphics.Path();
                 path.MoveTo(cx, cy);
                 path.LineTo(sx, sy);
-                for (int i = 0; i < 200; i++) path.LineTo(sx + (i % 2 == 0 ? 2 : 0), sy);
-                return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, SinglePush))!.Build()!;
-            }, SinglePush);
-            held = null;
-            if (!done) { try { await Task.Delay(60, ct); } catch { } }
+                for (int i = 0; i < 400; i++) path.LineTo(sx + (i % 2 == 0 ? 2 : 0), sy);
+                return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, LongPush))!.Build()!;
+            }, LongPush);
+            while (!t.IsCompleted && !ct.IsCancellationRequested)
+            {
+                try { await Task.Delay(100, ct); } catch { break; }
+                if (Math.Abs(wantX - sx) > 4 || Math.Abs(wantY - sy) > 4) break;      // a new direction: the next touch replaces this one
+            }
+            if (t.IsCompleted && !t.Result) { try { await Task.Delay(80, ct); } catch { } }
         }
         while (!ct.IsCancellationRequested)
         {
@@ -140,6 +149,19 @@ sealed class Stick
     {
         await StopPump();
         want = false;
+        if (longActive)
+        {
+            // the long touch is still down: a tiny touch on the middle of the pad replaces it and lifts
+            longActive = false;
+            float lx = cx, ly = cy;
+            await svc.DispatchAsync(() =>
+            {
+                var path = new Android.Graphics.Path();
+                path.MoveTo(lx, ly);
+                path.LineTo(lx + 1, ly);
+                return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, 30))!.Build()!;
+            }, 30);
+        }
         var prev = held;
         held = null;
         if (prev == null) return;
@@ -180,8 +202,9 @@ sealed class Nav
         var (sw0, sh0) = svc.ScreenSize();
         Slow = Math.Min(sw0, sh0) <= 800 || Prefs.GetInt($"nav_step_ms_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", 320) > 320;
         if (Slow) stick.Piece = 800;
-        // 1.5.9: one push at a time only on a slow phone (it switched on by mistake on a normal phone and made it stop and go)
-        stick.Single = Slow && Prefs.GetBoolean(SingleKey, false);
+        // 1.6.1: a slow phone always holds the move pad with one long touch (see Stick.Pump); a normal phone continues its touch piece
+        // by piece (smooth there)
+        stick.Single = Slow;
         if (!Slow && Prefs.GetBoolean(SingleKey, false)) Prefs.Edit()!.Remove(SingleKey)!.Apply();
         hand = Prefs.GetInt("nav_hand", 0) is int hd && hd != 0 ? hd : 1;
     }
@@ -612,14 +635,6 @@ sealed class Nav
                 {
                     lastRetouch = DateTime.UtcNow;
                     if (++retouches <= 3 || retouches % 10 == 0) AppLog.Add("walk: not moving - touching the move pad again");
-                    // 1.5.8: the second time in one walk on a phone that holds the touch piece by piece: it drops such touches - from now
-                    // on one whole push at a time (remembered for this screen)
-                    if (retouches == 2 && !stick.Single && Slow)
-                    {
-                        stick.Single = true;
-                        Prefs.Edit()!.PutBoolean(SingleKey, true)!.Apply();
-                        AppLog.Add("walk: this phone drops a held touch - pushing the move pad one push at a time from now on");
-                    }
                     await stick.RetouchAsync();
                 }
 
