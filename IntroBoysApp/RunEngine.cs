@@ -70,6 +70,7 @@ static class RunEngine
         bool den = mode == RunMode.Den;
         AppLog.Add("phone: " + AppLog.Device());
         countdownDone = false;
+        _ = Task.Run(() => WarPopupGuardAsync(svc, ct));       // 1.6.11
         restartAtOne = false;                                 // 1.5.3: a kick from an earlier, stopped run doesn't count
         // 1.4.9: no need to tap Live record first: on a phone that can only see the game through screen sharing (Android 9 and 10,
         // emulators) the run asks Android for it by itself and starts as soon as it is allowed
@@ -286,6 +287,23 @@ static class RunEngine
             // 1.6.9: the PC's recorded ways from macros.json for every boss, the first one too from the gate on (only its part past the
             // gate: y < 33380) - the straight walk from the gate drifted into the corridor walls (3800 , 30360 and 3816 , 31927)
             var way = den ? new List<(int x, int y)>() : routeIndex >= 1 ? Route(routeIndex) : Route(0).Where(q => q.y < 33380).ToList();
+            // 1.6.11: the PC's map (navmap.json). No recorded way (the Den), a recorded way that starts further on (boss 1 -> 2), or a walk
+            // that failed: the way is planned over the stretches the PC really walked, from where the character is now
+            if (here0.Ok && NavMap.Ready)
+            {
+                double toStart = way.Count > 1 ? way.Min(q => here0.Dist(q.x, q.y)) : double.MaxValue;
+                if (way.Count <= 1 || tries >= 1 || toStart > 400)
+                {
+                    var (gx, gy) = way.Count > 1 && tries == 0 ? way[0] : spot;
+                    var plan = NavMap.Plan(here0.X, here0.Y, gx, gy);
+                    if (plan != null && plan.Count > 1)
+                    {
+                        if (way.Count > 1 && tries == 0) { plan.AddRange(way); AppLog.Add($"walk: the PC's map to the start of the recorded way ({plan.Count - way.Count} points), then the recorded way"); }
+                        else AppLog.Add($"walk: following the PC's map to {name} ({plan.Count} points{(tries >= 1 ? ", planned again from " + here0 : "")})");
+                        way = plan;
+                    }
+                }
+            }
             if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
             var p = nav.Last;
             if (await OutsideAsync(nav, den, ct)) return false;
@@ -433,7 +451,7 @@ static class RunEngine
                         {
                             lastLootLook = DateTime.UtcNow;
                             int yl = await Screen.GroundYellowAsync();
-                            if (yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
+                            if (lo <= 0.05 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
                         }
                         if (noRedNow >= (lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }
                     }
@@ -486,7 +504,7 @@ static class RunEngine
             // 1.4.0: only a name, no red, for a long time on a phone that reads the red well: the target key has picked something else
             // (yourself, a player) and the boss is gone - it stayed 2 minutes on a dead boss until the fight's time ran out
             double noRed = (DateTime.UtcNow - lastRed).TotalSeconds;
-            if (alive && !red && redReads >= 8 && (noRed > (lo <= LowHp ? 12 : 20) || (lootBase >= 0 && await Screen.GroundYellowAsync() > lootBase + 18 + lootBase / 4)))
+            if (alive && !red && redReads >= 8 && (noRed > (lo <= LowHp ? 12 : 20) || (lo <= 0.05 && lootBase >= 0 && await Screen.GroundYellowAsync() > lootBase + 18 + lootBase / 4)))
             {
                 AppLog.Add($"{name}: only a name and no red bar for {noRed:0} s - counting it dead");
                 alive = false;
@@ -538,6 +556,30 @@ static class RunEngine
             Runner.SetPhase("war break over: back to the run");
         }
         finally { Runner.OnWarBreak = false; }
+    }
+
+    /// <summary>
+    /// 1.6.11: the "WAR - [Bohai Outpost (Adept)] Confirm to move?" pop-up stopped the run on the phone (the PC presses CANCEL on it).
+    /// Looked for every 3 s while a run goes on; CANCEL is pressed - never OK - except on the war break (the war is joined then).
+    /// </summary>
+    static async Task WarPopupGuardAsync(TapService svc, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(3000, ct); } catch { return; }
+            if (Runner.OnWarBreak) continue;
+            try
+            {
+                var lines = await Screen.TextAsync(0.25, 0.30, 0.50, 0.40, Math.Min(svc.ScreenSize().w, svc.ScreenSize().h) < 1000 ? 2 : 1);
+                string L(TextLine l) => new string(l.Text.Where(char.IsLetter).ToArray()).ToLowerInvariant();
+                if (!lines.Any(l => L(l).Contains("confirmtomove") || L(l).Contains("tomove"))) continue;
+                var cancel = lines.FirstOrDefault(l => L(l) == "cancel");
+                if (cancel.Text == null || cancel.Text.Length == 0) { AppLog.Add("war pop-up: on screen, but its CANCEL button wasn't found"); continue; }
+                await svc.PressAsync(cancel.Cx, cancel.Y + cancel.H / 2, 80);
+                AppLog.Add("war pop-up: pressed CANCEL");
+            }
+            catch { /* the next look */ }
+        }
     }
 
     static Place Target(bool den) => den ? Place.Den : Place.Labyrinth;

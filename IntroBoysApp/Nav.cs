@@ -86,7 +86,7 @@ sealed class Stick
                 // emulator / slow phone the character stood still for seconds after each one; small corrections wait for the next touch
                 double da = Math.Atan2(-(wantY - cy), wantX - cx) - Math.Atan2(-(sy - cy), sx - cx);
                 da = Math.Abs(Math.IEEERemainder(da, 2 * Math.PI)) * 180 / Math.PI;
-                if (da >= 20) break;
+                if (da >= 12) break;     // 1.6.11: 12° (20 let it swing ±80 across the corridor)
             }
             if (t.IsCompleted && !t.Result) { try { await Task.Delay(80, ct); } catch { } }
         }
