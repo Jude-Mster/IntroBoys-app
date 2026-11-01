@@ -65,6 +65,12 @@ sealed class Stick
 
     async Task Pump(CancellationToken ct)
     {
+        await PumpOnce(ct);
+        if (!ct.IsCancellationRequested && Single) await PumpOnce(ct);
+    }
+
+    async Task PumpOnce(CancellationToken ct)
+    {
         // 1.6.1: on a slow phone ONE long touch (finger down in the middle, out to the edge, held up to 10 s) - a new touch only when the
         // direction really changes or the 10 s are up. (1.5.8's 1.5-second pushes, and the touch continued piece by piece before, both
         // made the cloud phone stop and go.)
@@ -114,15 +120,38 @@ sealed class Stick
                 var path = new Android.Graphics.Path();
                 path.MoveTo(fx, fy);
                 path.LineTo(tx, ty);
+                // 1.6.23: press, hold and drag like a thumb: the drag to the new direction takes ~100 ms of the piece, the rest of it the
+                // thumb stays there (small wiggles: Android spreads the time over the path's length), and the next piece carries on from
+                // there without lifting
+                double dl = Math.Sqrt((tx - fx) * (tx - fx) + (ty - fy) * (ty - fy));
+                if (Piece > 150)
+                {
+                    double el = Math.Max(6, dl);
+                    float ux = (float)(-(ty - cy)), uy = (float)(tx - cx);
+                    double ul = Math.Max(1, Math.Sqrt(ux * ux + uy * uy)); ux /= (float)ul; uy /= (float)ul;
+                    int n = (int)Math.Min(3000, el * ((Piece - 100) / 100.0) / 3);
+                    for (int i = 0; i < n; i++) { float k = i % 2 == 0 ? 1.5f : -1.5f; path.LineTo(tx + ux * k, ty + uy * k); }
+                }
                 stroke = prev == null
                     ? new GestureDescription.StrokeDescription(path, 0, Piece, true)
                     : prev.ContinueStroke(path, 0, Piece, true);
                 return new GestureDescription.Builder().AddStroke(stroke!)!.Build()!;
             }, Piece);
             if (ok) { held = stroke; atX = tx; atY = ty; }
-            else { held = null; try { await Task.Delay(40, ct); } catch { } }      // cut off (a tap elsewhere): a new touch next
+            else
+            {
+                held = null;                                          // cut off (a tap elsewhere): a new touch next
+                // 1.6.23: a phone that keeps dropping the carried-on touch (the cloud phone did) goes back to one long held touch
+                var nowF = DateTime.UtcNow;
+                fails.Enqueue(nowF);
+                while (fails.Count > 0 && (nowF - fails.Peek()).TotalSeconds > 10) fails.Dequeue();
+                if (fails.Count >= 4) { Single = true; AppLog.Add("walk: this phone drops the dragged touch - holding the move pad as one long touch"); break; }
+                try { await Task.Delay(40, ct); } catch { }
+            }
         }
     }
+
+    readonly Queue<DateTime> fails = new();
 
     async Task StopPump()
     {
@@ -215,10 +244,12 @@ sealed class Nav
         stick = new Stick(svc, layout);
         var (sw0, sh0) = svc.ScreenSize();
         Slow = Math.Min(sw0, sh0) <= 800 || Prefs.GetInt($"nav_step_ms_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", 320) > 320;
-        if (Slow) stick.Piece = 800;
+        // 1.6.23: every phone presses, holds and drags the move pad (no lifting to change direction): pieces of 700 ms on a slow phone /
+        // emulator, 300 ms on others; a phone that drops the dragged touch is switched to one long held touch by itself
+        stick.Piece = Slow ? 700 : 300;
         // 1.6.1: a slow phone always holds the move pad with one long touch (see Stick.Pump); a normal phone continues its touch piece
         // by piece (smooth there)
-        stick.Single = Slow;
+        stick.Single = false;
         if (!Slow && Prefs.GetBoolean(SingleKey, false)) Prefs.Edit()!.Remove(SingleKey)!.Apply();
         hand = Prefs.GetInt("nav_hand", 0) is int hd && hd != 0 ? hd : 1;
     }
