@@ -260,6 +260,14 @@ sealed class Nav
     /// <summary>1.4.5: a slow phone (a small screen, or one that needs longer pushes): fewer screen reads while running, longer touch pieces.</summary>
     public bool Slow { get; private set; }
 
+    /// <summary>
+    /// 1.6.24: steering for a slow reader: a slow phone WITHOUT Live record. With Live record the position comes from the live picture
+    /// (several readings a second, a fraction of a second old), so even an emulator / cloud phone steers like a fast phone: corrections
+    /// from 6° and 60 units, half the error put right each time, 200 ahead on the way, "stuck" after 2.6 s.
+    /// </summary>
+    bool Sluggish => Slow && !Capture.On;
+    static bool liveSaid;
+
     // 1.4.0: where a detour last got round a wall, and which way (kept while the app runs)
     static Position goodAt;
     static double goodDetour;
@@ -684,6 +692,8 @@ sealed class Nav
         double prevStick = double.NaN, bigChange = 0;
         Position oddOne = default;
         var prevAt = DateTime.UtcNow;
+        int reads = 0;
+        if (Capture.On && !liveSaid) { liveSaid = true; AppLog.Add("walk: Live record is on - the position is read from the live picture (precise steering)"); }
         // 1.6.14: where the character IS now, not where the last picture showed it: a reading on an emulator / slow phone is a second or
         // more old (it runs ~300 further meanwhile), so the steering came late every time and the run weaved ±100 across the corridor into
         // the pillars beside the way. The speed from the last readings carries the position forward to now.
@@ -715,7 +725,12 @@ sealed class Nav
                 }
                 var (ax, ay) = aim != null ? aim(pn) : LineAim(pn);
                 // 1.6.2: where it is and where it aims, every 6 s (to see in the log which coordinate it follows)
-                if ((DateTime.UtcNow - lastTrace).TotalSeconds >= 6) { lastTrace = DateTime.UtcNow; AppLog.Add($"walk: at {p} → aiming at {ax} , {ay} ({(int)p.Dist(x, y)} to go)"); }
+                if ((DateTime.UtcNow - lastTrace).TotalSeconds >= 6)
+                {
+                    double rps = reads / Math.Max(0.5, (DateTime.UtcNow - lastTrace).TotalSeconds);
+                    lastTrace = DateTime.UtcNow; reads = 0;
+                    AppLog.Add($"walk: at {p} → aiming at {ax} , {ay} ({(int)p.Dist(x, y)} to go, {rps:0.#} readings/s{(Capture.On ? ", Live record" : "")})");
+                }
                 double want = MapAngle(ax - pn.X, ay - pn.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
@@ -724,17 +739,18 @@ sealed class Nav
                 // held up and turned by 10-25° to follow the corridor. So the stick is aimed by the measured camera (as before 1.6.15).
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
                 // corrections made the run weave, most of all on slow phones where they arrive late)
-                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
+                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Sluggish ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
                 // read the position while the stick is being pushed
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
                 // touch on the stick, so the run kept stopping)
                 // 1.6.4: not when reading the screen is slow by itself (a cloud phone: a reading takes a second or more there)
-                if (Slow && lastReadMs < 400) await Task.Delay(350, ct);
+                if (Sluggish && lastReadMs < 400) await Task.Delay(350, ct);
                 long seenAt = Screen.LastFrameAt;
                 var readStart = Environment.TickCount64;
                 var np = await Screen.PositionAsync();
                 lastReadMs = Environment.TickCount64 - readStart;
+                reads++;
                 // 1.6.19: when the picture was really taken (Android's own time stamp of the screenshot), not when the reading began
                 long capAt = Screen.LastFrameAt > 0 && Screen.LastFrameAt <= Environment.TickCount64 ? Screen.LastFrameAt : readStart;
                 // the same picture: no news. 1.5.8: but not for ever - screen sharing sends no new picture while nothing on the screen
@@ -779,7 +795,7 @@ sealed class Nav
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
                 // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
-                if (moved > (Slow ? 120 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(prevStick - s)) < 12)
+                if (moved > (Sluggish ? 120 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(prevStick - s)) < 12)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
                     // turned well away from "up" and the character went the mirrored way: the stick turns the other way round
@@ -802,7 +818,7 @@ sealed class Nav
                     if (Math.Abs(change) > 45 && !(bigChange != 0 && Math.Sign(bigChange) == Math.Sign(change))) bigChange = change;
                     // 1.6.17: the first stretch of a walk sets the camera outright: after a fight the camera is not where it was (to boss 2 it
                     // ran 7-10° east of the way from the first step, into the pillars beside it, and a 0.3 blend never caught up)
-                    else { off = Norm(off + change * (Slow ? 0.3 : 0.5)); bigChange = 0; }
+                    else { off = Norm(off + change * (Sluggish ? 0.3 : 0.5)); bigChange = 0; }
                 }
                 // the speed between the last two pictures (taken when the reading started)
                 if (lastCap > 0)
@@ -831,7 +847,7 @@ sealed class Nav
                 // stuck: not getting closer for about 2 seconds -> walk round it (left, right, further each time)
                 history.Add((DateTime.UtcNow, p.Dist(x, y)));
                 // 1.5.7: a slow phone gets a longer look before "stuck" (its readings come in jumps)
-                double win = Slow ? 3.8 : 2.6;
+                double win = Sluggish ? 3.8 : 2.6;
                 history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > win);
                 // 1.6.4: a cloud phone reads the position only every 1-3 s, so 4 readings never fit in the window and "stuck" never came:
                 // it stood against a wall for a minute, only touching the move pad again. Two readings are enough there - and standing
@@ -909,7 +925,7 @@ sealed class Nav
         // the character (it used to stop and start a new walk at every point, every ~300). Where the character is off the way, it aims
         // at the nearest point ahead, so it comes back onto the way; near the end it aims at the spot itself.
         int idx = Enumerable.Range(0, path.Count).OrderBy(i => p.Dist(path[i].x, path[i].y)).First();
-        double look = Slow ? 300 : 200;
+        double look = Sluggish ? 300 : 200;
         double D(Position q, (int x, int y) a) => Math.Sqrt(Math.Pow(q.X - a.x, 2) + Math.Pow(q.Y - a.y, 2));
         (int x, int y) Aim(Position q)
         {

@@ -133,7 +133,10 @@ static class Capture
                 var bytes = new byte[stride * (ih - 1) + iw * 4];
                 buf.Rewind();
                 buf.Get(bytes, 0, Math.Min(bytes.Length, buf.Remaining()));
-                last = new Frame(bytes, iw, ih, stride, System.Environment.TickCount64);
+                // 1.6.24: stamped with when the picture was made (the image's own time, nanoseconds on the same clock as uptimeMillis)
+                long age = 0;
+                try { age = Math.Clamp(Android.OS.SystemClock.UptimeMillis() - img.Timestamp / 1_000_000, 0, 1500); } catch { }
+                last = new Frame(bytes, iw, ih, stride, System.Environment.TickCount64 - age);
                 return last;
             }
             catch { return last; }
