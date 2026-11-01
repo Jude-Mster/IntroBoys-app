@@ -58,7 +58,9 @@ sealed class Stick
     /// stick was "held"). Remembered per screen.
     /// </summary>
     public bool Single;
-    const long LongPush = 10000;
+    // 1.6.20: 55 s (Android allows a touch of up to 60). At 10 s the touch ran out every 10 s and the new one made the character stop:
+    // "not moving - touching the move pad again" at 11:31:37, :47, :58 - every 10 s on the dot
+    const long LongPush = 55000;
     volatile bool longActive;
 
     async Task Pump(CancellationToken ct)
