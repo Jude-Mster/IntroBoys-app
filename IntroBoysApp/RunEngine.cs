@@ -404,6 +404,7 @@ static class RunEngine
         double lo = 1, hi = 0;
         int confirmMisses = 0, redReads = 0;
         var lastRed = DateTime.UtcNow;
+        var lastLootLook = DateTime.MinValue;
         while (true)
         {
             Runner.ShowPhase("fighting " + name);
@@ -421,10 +422,18 @@ static class RunEngine
                     // 1.6.3: the game keeps the dead boss's name in the target box - only the name, no red, kept it "alive": it swung on at a
                     // dead boss and stood there before walking on. On a phone that reads the red well (8+ red readings) a name without red
                     // counts as gone after 1.2 s when the boss was nearly dead, 6 s otherwise - counted from the last red seen.
-                    if (there && hp <= 0 && redReads >= 8 && (DateTime.UtcNow - lastRed).TotalSeconds >= (lo <= LowHp ? 2.0 : 6.0))
+                    // 1.6.8: but a boss with its last 1-2 % left shows no red either (it walked away from a living boss): a name without red
+                    // only counts as dead when its loot lies on the ground (the drops are the proof), or after 12 s (nearly dead) / 20 s
+                    if (there && hp <= 0 && redReads >= 8)
                     {
-                        there = false;
-                        goneSince ??= lastRed;
+                        double noRedNow = (DateTime.UtcNow - lastRed).TotalSeconds;
+                        if (noRedNow >= 1.5 && lootBase >= 0 && (DateTime.UtcNow - lastLootLook).TotalSeconds >= 1)
+                        {
+                            lastLootLook = DateTime.UtcNow;
+                            int yl = await Screen.GroundYellowAsync();
+                            if (yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
+                        }
+                        if (noRedNow >= (lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }
                     }
                     if (there) goneSince = null;
                     else goneSince ??= DateTime.UtcNow;
@@ -475,7 +484,7 @@ static class RunEngine
             // 1.4.0: only a name, no red, for a long time on a phone that reads the red well: the target key has picked something else
             // (yourself, a player) and the boss is gone - it stayed 2 minutes on a dead boss until the fight's time ran out
             double noRed = (DateTime.UtcNow - lastRed).TotalSeconds;
-            if (alive && !red && redReads >= 8 && noRed > (lo <= LowHp ? 2 : 8))
+            if (alive && !red && redReads >= 8 && (noRed > (lo <= LowHp ? 12 : 20) || (lootBase >= 0 && await Screen.GroundYellowAsync() > lootBase + 18 + lootBase / 4)))
             {
                 AppLog.Add($"{name}: only a name and no red bar for {noRed:0} s - counting it dead");
                 alive = false;

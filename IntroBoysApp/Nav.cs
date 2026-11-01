@@ -559,6 +559,19 @@ sealed class Nav
         if (!p.Ok) return false;
         if (p.Dist(x, y) <= tol) return true;
         if (!quiet) AppLog.Add($"walk: {p} → {x} , {y} ({(int)p.Dist(x, y)} away)");
+        // 1.6.8: a straight walk keeps to the straight line from where it started: when the character has drifted more than 80 off the
+        // line it aims at the line 500 ahead (it drifted 200 sideways over 3000 into the corridor wall: a small steering error is never
+        // corrected when aiming at a point thousands away)
+        double lx0 = p.X, ly0 = p.Y, ldx = x - p.X, ldy = y - p.Y, llen = Math.Sqrt(ldx * ldx + ldy * ldy);
+        (int x, int y) LineAim(Position q)
+        {
+            if (llen < 600) return (x, y);
+            double ux = ldx / llen, uy = ldy / llen;
+            double along = (q.X - lx0) * ux + (q.Y - ly0) * uy, side = -(q.X - lx0) * uy + (q.Y - ly0) * ux;
+            if (Math.Abs(side) < 80 || along > llen - 500) return (x, y);
+            double t = Math.Max(0, along) + 500;
+            return ((int)(lx0 + ux * t), (int)(ly0 + uy * t));
+        }
         var history = new List<(DateTime t, double d)>();
         int detours = 0, misses = 0, flips = 0, jumps = 0;
         bool rechecked = false, canMove = false;
@@ -588,7 +601,7 @@ sealed class Nav
 
                 // steer straight at the target (or the detour angle for a moment)
                 // 1.6.0: on a recorded way the stick aims at a point a little ahead on the way (the thumb stays down the whole way)
-                var (ax, ay) = aim != null ? aim(p) : (x, y);
+                var (ax, ay) = aim != null ? aim(p) : LineAim(p);
                 // 1.6.2: where it is and where it aims, every 6 s (to see in the log which coordinate it follows)
                 if ((DateTime.UtcNow - lastTrace).TotalSeconds >= 6) { lastTrace = DateTime.UtcNow; AppLog.Add($"walk: at {p} → aiming at {ax} , {ay} ({(int)p.Dist(x, y)} to go)"); }
                 double want = MapAngle(ax - p.X, ay - p.Y);
@@ -771,7 +784,21 @@ sealed class Nav
             for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= 300) return path[j];
             return (x, y);
         }
-        if (D(p, path[idx]) > 1200) { AppLog.Add($"walk: {p} is far from the recorded way - straight to the spot"); return await WalkToAsync(x, y, tol, ct); }
+        if (D(p, path[idx]) > 1200)
+        {
+            // 1.6.8: the way starts further on (the way to boss 2 starts 1700 past boss 1): walk to its start first, then follow it.
+            // Walking straight at the far spot went off at an angle into the walls and ended boxed in at the side.
+            double startToSpot = Math.Sqrt(Math.Pow(path[0].x - x, 2) + Math.Pow(path[0].y - y, 2));
+            if (startToSpot < p.Dist(x, y) && D(p, path[0]) <= 3000)
+            {
+                AppLog.Add($"walk: to the start of the recorded way first ({path[0].x} , {path[0].y})");
+                if (!await WalkToAsync(path[0].x, path[0].y, 250, ct, 60, release: false)) return false;
+                p = await ReadAsync(ct);
+                if (!p.Ok) return await WalkToAsync(x, y, tol, ct);
+                idx = 0;
+            }
+            else { AppLog.Add($"walk: {p} is far from the recorded way - straight to the spot"); return await WalkToAsync(x, y, tol, ct); }
+        }
         AppLog.Add($"walk: following the recorded way ({path.Count - idx} points, from {p})");
         return await WalkToAsync(x, y, tol, ct, 150, aim: Aim);
     }
