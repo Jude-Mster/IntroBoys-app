@@ -638,6 +638,11 @@ sealed class Nav
         double prevStick = double.NaN, bigChange = 0;
         Position oddOne = default;
         var prevAt = DateTime.UtcNow;
+        // 1.6.14: where the character IS now, not where the last picture showed it: a reading on an emulator / slow phone is a second or
+        // more old (it runs ~300 further meanwhile), so the steering came late every time and the run weaved ±100 across the corridor into
+        // the pillars beside the way. The speed from the last readings carries the position forward to now.
+        double vx = 0, vy = 0;
+        long lastCap = 0;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
@@ -654,10 +659,18 @@ sealed class Nav
 
                 // steer straight at the target (or the detour angle for a moment)
                 // 1.6.0: on a recorded way the stick aims at a point a little ahead on the way (the thumb stays down the whole way)
-                var (ax, ay) = aim != null ? aim(p) : LineAim(p);
+                var pn = p;
+                if (lastCap > 0)
+                {
+                    double lead = Math.Clamp((Environment.TickCount64 - lastCap) / 1000.0 + 0.25, 0, 2);
+                    double fx = vx * lead, fy = vy * lead, fl = Math.Sqrt(fx * fx + fy * fy);
+                    if (fl > 400) { fx *= 400 / fl; fy *= 400 / fl; }
+                    pn = p with { X = p.X + (int)fx, Y = p.Y + (int)fy };
+                }
+                var (ax, ay) = aim != null ? aim(pn) : LineAim(pn);
                 // 1.6.2: where it is and where it aims, every 6 s (to see in the log which coordinate it follows)
                 if ((DateTime.UtcNow - lastTrace).TotalSeconds >= 6) { lastTrace = DateTime.UtcNow; AppLog.Add($"walk: at {p} → aiming at {ax} , {ay} ({(int)p.Dist(x, y)} to go)"); }
-                double want = MapAngle(ax - p.X, ay - p.Y);
+                double want = MapAngle(ax - pn.X, ay - pn.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
@@ -738,6 +751,18 @@ sealed class Nav
                     if (Math.Abs(change) > 45 && !(bigChange != 0 && Math.Sign(bigChange) == Math.Sign(change))) bigChange = change;
                     else { off = Norm(off + change * (Slow ? 0.3 : 0.5)); bigChange = 0; }
                 }
+                // the speed between the last two pictures (taken when the reading started)
+                if (lastCap > 0)
+                {
+                    double dt = (readStart - lastCap) / 1000.0;
+                    if (dt >= 0.15 && dt <= 3)
+                    {
+                        double nvx = (np.X - prev.X) / dt, nvy = (np.Y - prev.Y) / dt;
+                        if (Math.Sqrt(nvx * nvx + nvy * nvy) > 700) { nvx = vx; nvy = vy; }        // a misread, not a speed
+                        vx = vx * 0.4 + nvx * 0.6; vy = vy * 0.4 + nvy * 0.6;
+                    }
+                }
+                lastCap = readStart;
                 prevStick = s;
                 prev = np;
                 prevAt = DateTime.UtcNow;
@@ -795,6 +820,7 @@ sealed class Nav
                         var rp = await ReadAsync(ct, 1);
                         if (rp.Ok) { p = rp; prev = rp; }
                         detourUntil = DateTime.MinValue;
+                        vx = vy = 0; lastCap = 0;
                         continue;
                     }
                     // 1.4.0: only when the step test did NOT show it can move (it can: then it is a wall - go round it, wider and longer;
