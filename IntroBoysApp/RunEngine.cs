@@ -277,6 +277,13 @@ static class RunEngine
                 await nav.WalkToAsync(via.x, via.y, 250, ct, 75, release: false);
             }
         }
+        // 1.6.19: after a fight the camera is not where it was (the walk to boss 2 ran 7-10° off from its first step, into the pillars).
+        // It is measured standing still - a short step and the same step back, which must agree - before the walk, where nothing lags.
+        if (!den && routeIndex >= 1)
+        {
+            Runner.SetPhase("checking the camera before walking to " + name);
+            await nav.CalibrateAsync(ct);
+        }
         for (int tries = 0; tries < 4; tries++)
         {
             // 1.5.4: never walk to a boss outside the dungeon (it tried to walk to boss 1 in town, 11000 away)

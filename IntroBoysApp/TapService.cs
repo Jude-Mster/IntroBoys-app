@@ -312,7 +312,11 @@ public class TapService : AccessibilityService
                     copyBuf.Rewind();
                     var bytes = new byte[n];
                     copyBuf.Get(bytes);
-                    done.TrySetResult(new Frame(bytes, w, h, w * 4, System.Environment.TickCount64));
+                    // 1.6.19: stamped with the moment the screen was captured (Android gives it), not when the copy was finished: the
+                    // walk works out how old a position is from this, and carries it forward by the character's speed
+                    long age = 0;
+                    try { age = Math.Clamp(Android.OS.SystemClock.UptimeMillis() - screenshot.Timestamp, 0, 3000); } catch { }
+                    done.TrySetResult(new Frame(bytes, w, h, w * 4, System.Environment.TickCount64 - age));
                 }
                 finally
                 {

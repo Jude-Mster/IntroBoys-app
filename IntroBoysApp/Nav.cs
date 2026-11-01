@@ -643,9 +643,6 @@ sealed class Nav
         // the pillars beside the way. The speed from the last readings carries the position forward to now.
         double vx = 0, vy = 0;
         long lastCap = 0;
-        bool firstFix = true;
-        Position fixFrom = default;
-        double fixStick = double.NaN;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
@@ -692,6 +689,8 @@ sealed class Nav
                 var readStart = Environment.TickCount64;
                 var np = await Screen.PositionAsync();
                 lastReadMs = Environment.TickCount64 - readStart;
+                // 1.6.19: when the picture was really taken (Android's own time stamp of the screenshot), not when the reading began
+                long capAt = Screen.LastFrameAt > 0 && Screen.LastFrameAt <= Environment.TickCount64 ? Screen.LastFrameAt : readStart;
                 // the same picture: no news. 1.5.8: but not for ever - screen sharing sends no new picture while nothing on the screen
                 // changes, and then the walk waited without end (30 s and more, no "stuck"): after 0.8 s the old picture counts
                 if (Screen.LastFrameAt == seenAt)
@@ -731,20 +730,6 @@ sealed class Nav
                     await stick.RetouchAsync();
                 }
 
-                // 1.6.18: the camera after a fight: measured once over the first 250+ of the walk run with one stick angle (a long stretch:
-                // 1.6.17 took the first 100, which at the start of a run is mostly speeding up and reading lag, and threw the walk to boss 1
-                // into the wall). Only a real difference (over 5°) is put right, all at once.
-                if (firstFix)
-                {
-                    if (!fixFrom.Ok || double.IsNaN(fixStick) || Math.Abs(Norm(prevStick - fixStick)) > 6) { fixFrom = np; fixStick = prevStick; }
-                    else if (np.Dist(fixFrom.X, fixFrom.Y) >= 250)
-                    {
-                        double seen0 = MapAngle(np.X - fixFrom.X, np.Y - fixFrom.Y);
-                        double err0 = Norm(Norm(seen0 - hand * fixStick) - off);
-                        if (Math.Abs(err0) > 5 && Math.Abs(err0) < 60) { off = Norm(off + err0); AppLog.Add($"walk: the camera is {err0:0}° from where it was - corrected"); }
-                        firstFix = false;
-                    }
-                }
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
                 // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
@@ -776,7 +761,7 @@ sealed class Nav
                 // the speed between the last two pictures (taken when the reading started)
                 if (lastCap > 0)
                 {
-                    double dt = (readStart - lastCap) / 1000.0;
+                    double dt = (capAt - lastCap) / 1000.0;
                     if (dt >= 0.15 && dt <= 3)
                     {
                         double nvx = (np.X - prev.X) / dt, nvy = (np.Y - prev.Y) / dt;
@@ -784,7 +769,7 @@ sealed class Nav
                         vx = vx * 0.4 + nvx * 0.6; vy = vy * 0.4 + nvy * 0.6;
                     }
                 }
-                lastCap = readStart;
+                lastCap = capAt;
                 prevStick = s;
                 prev = np;
                 prevAt = DateTime.UtcNow;
