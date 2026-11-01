@@ -643,6 +643,7 @@ sealed class Nav
         // the pillars beside the way. The speed from the last readings carries the position forward to now.
         double vx = 0, vy = 0;
         long lastCap = 0;
+        bool followSeen = false;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
@@ -673,6 +674,19 @@ sealed class Nav
                 double want = MapAngle(ax - pn.X, ay - pn.Y);
                 if (DateTime.UtcNow < detourUntil) want = Norm(want + detour);
                 double s = Norm(hand * (want - off));
+                // 1.6.15: the game's camera follows the character (the members' runs on video: the corridor is always straight ahead, the
+                // mini-map always points up) - so the stick is a steering wheel: pushed up = keep going the way it runs, a little to the
+                // side = turn a little. The way it runs right now (its speed) is "up"; the stick turns it by 70 % of what is missing, at
+                // most 50° (a big push to the side made it turn on and on as the camera swung after it: the zig-zags and circles).
+                double spd = Math.Sqrt(vx * vx + vy * vy);
+                if (spd > 80 && lastCap > 0 && Environment.TickCount64 - lastCap < 2500)
+                {
+                    followSeen = true;
+                    double heading = MapAngle((int)vx, (int)vy);
+                    off = Norm(heading - hand * 90);
+                    double rel = Math.Clamp(Norm(want - heading) * 0.7, -50, 50);
+                    s = Norm(90 + hand * rel);
+                }
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
                 // corrections made the run weave, most of all on slow phones where they arrive late)
                 if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
@@ -805,6 +819,9 @@ sealed class Nav
                     }
                     // 1.3.7: stuck twice - the camera may have been turned (by hand, by accident): measure again which way the stick goes
                     // (a step and the same step back) before walking round, so the detours go the right way
+                    // 1.6.15: with the camera following the character, a test step (up and back) turns the camera round: the "measure" it
+                    // gave once had the character run back the way it came. Once the way it runs has been seen, there is nothing to measure.
+                    if (detours == 2 && !rechecked && followSeen) { rechecked = true; canMove = true; }
                     if (detours == 2 && !rechecked)
                     {
                         rechecked = true;
