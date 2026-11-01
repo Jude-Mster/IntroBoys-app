@@ -654,6 +654,9 @@ sealed class Nav
     public double Forward => Norm(off + hand * 90);
     public bool Known => known;
 
+    /// <summary>1.6.27: the last walk got stuck at least once (then the camera is checked before the next one).</summary>
+    public bool LastWalkTrouble { get; private set; }
+
     /// <summary>
     /// Walks to (x, y) until within <paramref name="tol"/> map units. Returns true when there, false when it gave up (stuck, can't read
     /// the position, or out of time).
@@ -696,6 +699,7 @@ sealed class Nav
         Position oddOne = default;
         var prevAt = DateTime.UtcNow;
         int reads = 0;
+        LastWalkTrouble = false;
         if (Capture.On && !liveSaid) { liveSaid = true; AppLog.Add("walk: Live record is on - the position is read from the live picture (precise steering)"); }
         // 1.6.14: where the character IS now, not where the last picture showed it: a reading on an emulator / slow phone is a second or
         // more old (it runs ~300 further meanwhile), so the steering came late every time and the run weaved ±100 across the corridor into
@@ -862,6 +866,7 @@ sealed class Nav
                 if (DateTime.UtcNow > detourUntil && (stuckHere || standing))
                 {
                     if (standing) { lastMoveAt = DateTime.UtcNow; moveAnchor = p; }
+                    LastWalkTrouble = true;
                     if (++detours > 10) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
                     // 1.4.0: a detour that got round this wall before (the same place) is tried first, straight away

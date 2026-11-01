@@ -279,7 +279,9 @@ static class RunEngine
         }
         // 1.6.19: after a fight the camera is not where it was (the walk to boss 2 ran 7-10° off from its first step, into the pillars).
         // It is measured standing still - a short step and the same step back, which must agree - before the walk, where nothing lags.
-        if (!den && routeIndex >= 1)
+        // 1.6.27: only when the last walk had trouble (stuck, detours, a new measure) or the camera was never measured: in 11 runs it was
+        // -84° to -88° every time, and the check cost ~10 s before every boss (40 s a run)
+        if (!den && routeIndex >= 1 && (nav.LastWalkTrouble || !nav.Known))
         {
             Runner.SetPhase("checking the camera before walking to " + name);
             await nav.CalibrateAsync(ct);
@@ -476,7 +478,7 @@ static class RunEngine
                             int yl = await Screen.GroundYellowAsync();
                             if (lo <= 0.05 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
                         }
-                        if (noRedNow >= (lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }
+                        if (noRedNow >= (lo <= 0.003 ? 4.0 : lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }      // 1.6.27: 4 s when the numbers last read under 0.3 %
                     }
                     if (there) goneSince = null;
                     else goneSince ??= DateTime.UtcNow;
@@ -527,7 +529,7 @@ static class RunEngine
             // 1.4.0: only a name, no red, for a long time on a phone that reads the red well: the target key has picked something else
             // (yourself, a player) and the boss is gone - it stayed 2 minutes on a dead boss until the fight's time ran out
             double noRed = (DateTime.UtcNow - lastRed).TotalSeconds;
-            if (alive && !red && redReads >= 8 && (noRed > (lo <= LowHp ? 12 : 20) || (lo <= 0.05 && lootBase >= 0 && await Screen.GroundYellowAsync() > lootBase + 18 + lootBase / 4)))
+            if (alive && !red && redReads >= 8 && (noRed > (lo <= 0.003 ? 4 : lo <= LowHp ? 12 : 20) || (lo <= 0.05 && lootBase >= 0 && await Screen.GroundYellowAsync() > lootBase + 18 + lootBase / 4)))
             {
                 AppLog.Add($"{name}: only a name and no red bar for {noRed:0} s - counting it dead");
                 alive = false;
@@ -681,7 +683,15 @@ static class RunEngine
         {
             await Task.Delay(400, ct);
             now = await Screen.GroundYellowAsync();          // one more look (the items may be a moment late)
-            if (now <= lootBase + thr) { AppLog.Add("loot: nothing on the ground"); return; }
+            if (now <= lootBase + thr)
+            {
+                // 1.6.27: two taps anyway (1 s): "nothing on the ground" was most kills in 11 runs, and a drop that isn't seen is lost
+                AppLog.Add("loot: nothing seen on the ground - two taps to be sure");
+                var (lw, lh) = svc.ScreenSize();
+                var (lx, ly) = layout.At(loot, lw, lh);
+                for (int i = 0; i < 2; i++) { await svc.PressAsync(lx, ly, 60); await Task.Delay(350, ct); }
+                return;
+            }
         }
         Runner.SetPhase("looting");
         var (w, h) = svc.ScreenSize();
