@@ -253,7 +253,29 @@ sealed class Nav
     /// </summary>
     public async Task<bool> CalibrateAsync(CancellationToken ct)
     {
+        bool wasKnown = known;
+        double oldOff = off;
         var fwd = await StepAsync(90, ct);
+        // 1.6.13: measured again in the middle of a walk (stuck at a wall): the step up can be blocked or slide along the wall, and one
+        // such step once turned the measure round (the camera "looked 89°" instead of -86°: it ran back the way it came). The step down
+        // must agree (opposite, within 40°), else the measure is not taken and the direction it had is kept.
+        if (wasKnown)
+        {
+            var back = await StepAsync(270, ct);
+            if (fwd != null && back != null && Math.Abs(Norm(fwd.Value - (back.Value + 180))) <= 40)
+                fwd = Norm(fwd.Value + Norm(back.Value + 180 - fwd.Value) / 2);
+            else
+            {
+                double oldFwd = Norm(oldOff + hand * 90);
+                double? one = fwd ?? (back != null ? Norm(back.Value + 180) : null);
+                if (one == null || Math.Abs(Norm(one.Value - oldFwd)) > 35)
+                {
+                    AppLog.Add($"walk: the two test steps didn't agree (blocked?) - keeping the camera at {(int)oldFwd}°");
+                    return true;
+                }
+                fwd = one;
+            }
+        }
         if (fwd == null) { var back = await StepAsync(270, ct); if (back != null) fwd = Norm(back.Value + 180); }
         if (fwd == null) { AppLog.Add("walk: couldn't measure the stick (blocked, or the position can't be read)"); return false; }
         if (Prefs.GetInt("nav_hand", 0) == 0)
