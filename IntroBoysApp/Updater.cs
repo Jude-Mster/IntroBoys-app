@@ -125,7 +125,7 @@ static class Updater
         var prm = new PackageInstaller.SessionParams(PackageInstallMode.FullInstall);
         prm.SetAppPackageName(a.PackageName);
         // 1.6.6: Android 12+: no prompt at all when this app installed itself before (it is then the "installer" of the app)
-        if (OperatingSystem.IsAndroidVersionAtLeast(31)) prm.SetRequireUserAction(PackageInstallUserAction.NotRequired);
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) prm.SetRequireUserAction(2);      // USER_ACTION_NOT_REQUIRED
         int id = installer.CreateSession(prm);
         using var session = installer.OpenSession(id);
         await using (var input = File.OpenRead(path))
