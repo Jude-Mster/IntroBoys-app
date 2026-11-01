@@ -643,6 +643,7 @@ sealed class Nav
         // the pillars beside the way. The speed from the last readings carries the position forward to now.
         double vx = 0, vy = 0;
         long lastCap = 0;
+        bool firstFix = true;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
@@ -678,7 +679,7 @@ sealed class Nav
                 // held up and turned by 10-25° to follow the corridor. So the stick is aimed by the measured camera (as before 1.6.15).
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
                 // corrections made the run weave, most of all on slow phones where they arrive late)
-                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
+                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 6 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
                 // read the position while the stick is being pushed
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
@@ -731,7 +732,7 @@ sealed class Nav
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
                 // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
-                if (moved > (Slow ? 120 : 60) && !double.IsNaN(prevStick) && Math.Abs(Norm(prevStick - s)) < 12)
+                if (moved > (Slow ? 100 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
                     // turned well away from "up" and the character went the mirrored way: the stick turns the other way round
@@ -748,11 +749,13 @@ sealed class Nav
                             AppLog.Add("walk: the stick turns the other way round, corrected");
                         }
                     }
-                    double newOff = Norm(seen - hand * s);
+                    double newOff = Norm(seen - hand * prevStick);      // 1.6.17: the stick that was held for this stretch (not the new one)
                     // 1.5.3: one odd stretch (a bump, a misread) does not swing the direction: a big change needs two in a row
                     double change = Norm(newOff - off);
                     if (Math.Abs(change) > 45 && !(bigChange != 0 && Math.Sign(bigChange) == Math.Sign(change))) bigChange = change;
-                    else { off = Norm(off + change * (Slow ? 0.3 : 0.5)); bigChange = 0; }
+                    // 1.6.17: the first stretch of a walk sets the camera outright: after a fight the camera is not where it was (to boss 2 it
+                    // ran 7-10° east of the way from the first step, into the pillars beside it, and a 0.3 blend never caught up)
+                    else { off = Norm(off + change * (firstFix ? 1.0 : Slow ? 0.5 : 0.6)); bigChange = 0; if (firstFix && Math.Abs(change) > 4) AppLog.Add($"walk: the camera is {change:0}° from where it was - corrected"); firstFix = false; }
                 }
                 // the speed between the last two pictures (taken when the reading started)
                 if (lastCap > 0)
@@ -867,7 +870,9 @@ sealed class Nav
             for (int j = idx + 1; j < Math.Min(path.Count, idx + 60); j++) { double d = D(q, path[j]); if (d < bd) { bd = d; best = j; } }
             idx = best;
             // 1.6.9: 200 ahead on a phone that reads fast (300 let it cut corners into the pillars the PC's way goes round); 300 on a slow one
-            for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= look) return path[j];
+            // 1.6.17: off the way by more than 100 (pushed aside by a pillar or a detour): back to the way first, aiming just ahead on it
+            double la = bd > 100 ? 120 : look;
+            for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= la) return path[j];
             return (x, y);
         }
         if (D(p, path[idx]) > 1200)
