@@ -60,7 +60,7 @@ sealed class Stick
     public bool Single;
     // 1.6.20: 55 s (Android allows a touch of up to 60). At 10 s the touch ran out every 10 s and the new one made the character stop:
     // "not moving - touching the move pad again" at 11:31:37, :47, :58 - every 10 s on the dot
-    const long LongPush = 55000;
+    const long LongPush = 30000;      // 1.6.21: 30 s (55 needed a path too long to draw quickly)
     volatile bool longActive;
 
     async Task Pump(CancellationToken ct)
@@ -78,7 +78,15 @@ sealed class Stick
                 var path = new Android.Graphics.Path();
                 path.MoveTo(cx, cy);
                 path.LineTo(sx, sy);
-                for (int i = 0; i < 400; i++) path.LineTo(sx + (i % 2 == 0 ? 2 : 0), sy);
+                // 1.6.21: Android spreads a touch's time over the LENGTH of its path. The out-to-the-edge part must take ~150 ms, so the
+                // "stay at the edge" part is made long enough (small sideways wiggles): with a 55 s touch and only 400 tiny wiggles the
+                // thumb took ~7 s to reach the edge - the character didn't move after the gate at all (1.6.20), and with 10 s it took
+                // ~1.3 s at every new touch (the stop-and-go before)
+                double el = Math.Max(20, Math.Sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy)));
+                float ux = (float)(-(sy - cy) / el), uy = (float)((sx - cx) / el);       // across the push
+                const float amp = 6f;
+                int n = (int)Math.Min(12000, el * (LongPush / 150.0) / amp);
+                for (int i = 0; i < n; i++) { float k = i % 2 == 0 ? amp / 2 : -amp / 2; path.LineTo(sx + ux * k, sy + uy * k); }
                 return new GestureDescription.Builder().AddStroke(new GestureDescription.StrokeDescription(path, 0, LongPush))!.Build()!;
             }, LongPush);
             while (!t.IsCompleted && !ct.IsCancellationRequested)
