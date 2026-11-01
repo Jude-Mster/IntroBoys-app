@@ -82,7 +82,11 @@ sealed class Stick
             while (!t.IsCompleted && !ct.IsCancellationRequested)
             {
                 try { await Task.Delay(100, ct); } catch { break; }
-                if (Math.Abs(wantX - sx) > 4 || Math.Abs(wantY - sy) > 4) break;      // a new direction: the next touch replaces this one
+                // 1.6.9: only a real change of direction (20°+) starts a new touch - every new touch lifts the finger, and on an
+                // emulator / slow phone the character stood still for seconds after each one; small corrections wait for the next touch
+                double da = Math.Atan2(-(wantY - cy), wantX - cx) - Math.Atan2(-(sy - cy), sx - cx);
+                da = Math.Abs(Math.IEEERemainder(da, 2 * Math.PI)) * 180 / Math.PI;
+                if (da >= 20) break;
             }
             if (t.IsCompleted && !t.Result) { try { await Task.Delay(80, ct); } catch { } }
         }
@@ -705,8 +709,10 @@ sealed class Nav
                 // 1.6.4: a cloud phone reads the position only every 1-3 s, so 4 readings never fit in the window and "stuck" never came:
                 // it stood against a wall for a minute, only touching the move pad again. Two readings are enough there - and standing
                 // still for 6 s (not 60 units from one spot) counts as stuck on every phone, however few readings came.
-                bool stuckHere = history.Count >= (Slow ? 2 : 4) && (DateTime.UtcNow - history[0].t).TotalSeconds > win - 0.6 && history[0].d - history[^1].d < 60;
-                bool standing = (DateTime.UtcNow - lastMoveAt).TotalSeconds > 6 && (DateTime.UtcNow - detourUntil).TotalSeconds > 1.5;
+                // 1.6.9: a fresh touch of the move pad gets 2.5 s to work before a detour turns the character away from its way
+                bool justRetouched = (DateTime.UtcNow - lastRetouch).TotalSeconds < 2.5;
+                bool stuckHere = !justRetouched && history.Count >= (Slow ? 2 : 4) && (DateTime.UtcNow - history[0].t).TotalSeconds > win - 0.6 && history[0].d - history[^1].d < 60;
+                bool standing = !justRetouched && (DateTime.UtcNow - lastMoveAt).TotalSeconds > 6 && (DateTime.UtcNow - detourUntil).TotalSeconds > 1.5;
                 if (DateTime.UtcNow > detourUntil && (stuckHere || standing))
                 {
                     if (standing) { lastMoveAt = DateTime.UtcNow; moveAnchor = p; }
