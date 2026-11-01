@@ -609,7 +609,7 @@ sealed class Nav
                 double s = Norm(hand * (want - off));
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
                 // corrections made the run weave, most of all on slow phones where they arrive late)
-                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : 6)) s = prevStick;
+                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
                 // read the position while the stick is being pushed
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
@@ -775,13 +775,15 @@ sealed class Nav
         // the character (it used to stop and start a new walk at every point, every ~300). Where the character is off the way, it aims
         // at the nearest point ahead, so it comes back onto the way; near the end it aims at the spot itself.
         int idx = Enumerable.Range(0, path.Count).OrderBy(i => p.Dist(path[i].x, path[i].y)).First();
+        double look = Slow ? 300 : 200;
         double D(Position q, (int x, int y) a) => Math.Sqrt(Math.Pow(q.X - a.x, 2) + Math.Pow(q.Y - a.y, 2));
         (int x, int y) Aim(Position q)
         {
             int best = idx; double bd = D(q, path[idx]);
             for (int j = idx + 1; j < Math.Min(path.Count, idx + 60); j++) { double d = D(q, path[j]); if (d < bd) { bd = d; best = j; } }
             idx = best;
-            for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= 300) return path[j];
+            // 1.6.9: 200 ahead on a phone that reads fast (300 let it cut corners into the pillars the PC's way goes round); 300 on a slow one
+            for (int j = idx; j < path.Count; j++) if (D(q, path[j]) >= look) return path[j];
             return (x, y);
         }
         if (D(p, path[idx]) > 1200)

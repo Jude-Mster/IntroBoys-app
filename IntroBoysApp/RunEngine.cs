@@ -283,7 +283,9 @@ static class RunEngine
             var pl0 = Screen.PlaceOf(here0);
             if (pl0 != Place.Unknown && pl0 != Target(den) && await OutsideAsync(nav, den, ct)) return false;
             // 1.6.0: the PC's recorded ways between the bosses (not the first one, from the entrance: that is walked straight)
-            var way = routeIndex >= 1 ? Route(routeIndex) : new List<(int x, int y)>();
+            // 1.6.9: the PC's recorded ways from macros.json for every boss, the first one too from the gate on (only its part past the
+            // gate: y < 33380) - the straight walk from the gate drifted into the corridor walls (3800 , 30360 and 3816 , 31927)
+            var way = den ? new List<(int x, int y)>() : routeIndex >= 1 ? Route(routeIndex) : Route(0).Where(q => q.y < 33380).ToList();
             if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
             var p = nav.Last;
             if (await OutsideAsync(nav, den, ct)) return false;
