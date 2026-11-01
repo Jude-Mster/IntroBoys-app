@@ -548,6 +548,8 @@ sealed class Nav
     /// Walks to (x, y) until within <paramref name="tol"/> map units. Returns true when there, false when it gave up (stuck, can't read
     /// the position, or out of time).
     /// </summary>
+    long lastReadMs;
+
     public async Task<bool> WalkToAsync(int x, int y, double tol, CancellationToken ct, double maxSecs = 90, bool release = true, bool quiet = false,
                                         Func<Position, (int x, int y)>? aim = null)
     {
@@ -599,9 +601,12 @@ sealed class Nav
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
                 // touch on the stick, so the run kept stopping)
-                if (Slow) await Task.Delay(350, ct);
+                // 1.6.4: not when reading the screen is slow by itself (a cloud phone: a reading takes a second or more there)
+                if (Slow && lastReadMs < 400) await Task.Delay(350, ct);
                 long seenAt = Screen.LastFrameAt;
+                var readStart = Environment.TickCount64;
                 var np = await Screen.PositionAsync();
+                lastReadMs = Environment.TickCount64 - readStart;
                 // the same picture: no news. 1.5.8: but not for ever - screen sharing sends no new picture while nothing on the screen
                 // changes, and then the walk waited without end (30 s and more, no "stuck"): after 0.8 s the old picture counts
                 if (Screen.LastFrameAt == seenAt)
@@ -684,8 +689,14 @@ sealed class Nav
                 // 1.5.7: a slow phone gets a longer look before "stuck" (its readings come in jumps)
                 double win = Slow ? 3.8 : 2.6;
                 history.RemoveAll(h => (DateTime.UtcNow - h.t).TotalSeconds > win);
-                if (DateTime.UtcNow > detourUntil && history.Count >= 4 && (DateTime.UtcNow - history[0].t).TotalSeconds > win - 0.6 && history[0].d - history[^1].d < 60)
+                // 1.6.4: a cloud phone reads the position only every 1-3 s, so 4 readings never fit in the window and "stuck" never came:
+                // it stood against a wall for a minute, only touching the move pad again. Two readings are enough there - and standing
+                // still for 6 s (not 60 units from one spot) counts as stuck on every phone, however few readings came.
+                bool stuckHere = history.Count >= (Slow ? 2 : 4) && (DateTime.UtcNow - history[0].t).TotalSeconds > win - 0.6 && history[0].d - history[^1].d < 60;
+                bool standing = (DateTime.UtcNow - lastMoveAt).TotalSeconds > 6 && (DateTime.UtcNow - detourUntil).TotalSeconds > 1.5;
+                if (DateTime.UtcNow > detourUntil && (stuckHere || standing))
                 {
+                    if (standing) { lastMoveAt = DateTime.UtcNow; moveAnchor = p; }
                     if (++detours > 10) { AppLog.Add("walk: stuck, giving up this walk"); return false; }
                     if (detours == 1) firstStuck = p;
                     // 1.4.0: a detour that got round this wall before (the same place) is tried first, straight away
