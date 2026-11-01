@@ -319,7 +319,13 @@ static class RunEngine
                 AppLog.Add($"LOD: watching {DenRespawnWait:0} s for the boss to respawn");
             }
             int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0);
-            if (den && fights > 0 && up == 0) { AppLog.Add("LOD: no respawn"); break; }
+            if (den && fights > 0 && up == 0)
+            {
+                AppLog.Add("LOD: no respawn");
+                // 1.6.5: after a respawn, one more loot burst (the respawned boss's drops were left lying: they landed after the pass)
+                if (fights > 1 && layout.Find(BubbleKind.AutoLoot) != null) { AppLog.Add("loot: one more pass for the respawned boss"); Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); }
+                break;
+            }
             if (den && fights > 0 && up > 0) AppLog.Add($"LOD: the boss respawned ({fights}) - attacking it");
             if (up < 0) return false;                          // 1.3.7: not in the dungeon any more
             if (up == 0)
@@ -590,7 +596,7 @@ static class RunEngine
     {
         var loot = layout.Find(BubbleKind.AutoLoot);
         if (loot == null) return;
-        await Task.Delay(500, ct);                           // the drops show up a moment after the death
+        await Task.Delay(1000, ct);                          // the drops show up a moment after the death (1.6.5: 1 s, was 0.5)
         int now = await Screen.GroundYellowAsync();
         if (now < 0 || lootBase < 0) { Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); return; }
         int thr = 18 + lootBase / 4;
