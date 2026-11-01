@@ -283,6 +283,22 @@ static class RunEngine
         {
             Runner.SetPhase("checking the camera before walking to " + name);
             await nav.CalibrateAsync(ct);
+            // 1.6.22: and turned to look down the way, as after the teleport (the camera came out of the fight at -40°: every walk then
+            // pushed the stick 45° to the side, and drifted into the pillars). The way's direction: from its start to ~600 along.
+            var leg = Route(routeIndex);
+            if (leg.Count > 3)
+            {
+                var a0 = leg[0];
+                var a1 = leg.FirstOrDefault(q => Math.Sqrt(Math.Pow(q.x - a0.x, 2) + Math.Pow(q.y - a0.y, 2)) >= 600);
+                if (a1 == default) a1 = leg[^1];
+                double legDir = Math.Atan2(a1.y - a0.y, a1.x - a0.x) * 180 / Math.PI;
+                double offBy = Math.IEEERemainder(legDir - nav.Forward, 360);
+                if (Math.Abs(offBy) > 15)
+                {
+                    AppLog.Add($"camera: {(int)offBy}° from the way to {name} - turning it");
+                    await nav.AlignAsync(legDir, ct, remember: false);
+                }
+            }
         }
         for (int tries = 0; tries < 4; tries++)
         {

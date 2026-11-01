@@ -368,7 +368,7 @@ sealed class Nav
     /// After the teleport: turns the camera (it never walks for this) until it looks toward the map direction <paramref name="toward"/>,
     /// the way the member finds the door by turning the view. How far a camera drag turns is measured once and remembered.
     /// </summary>
-    public async Task AlignAsync(double toward, CancellationToken ct)
+    public async Task AlignAsync(double toward, CancellationToken ct, bool remember = true)
     {
         var cam = layout.Find(BubbleKind.Camera);
         if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
@@ -388,8 +388,13 @@ sealed class Nav
                 hand = Prefs.GetInt("nav_hand", 1);
                 off = Norm(toward - hand * 90);                 // Forward = the gate's direction
                 known = true;
-                AppLog.Add($"camera: turned to the gate as last time (no test step)");
-                return;
+                // 1.6.22: checked with a test step (the countdown is running anyway): the same drag doesn't always land on the gate - the
+                // view after the teleport isn't always the same, and twice it ended 40-49° off (the run then went at the wall and stopped).
+                // Then it is turned onto the gate below, like 1.6.12 runs that went straight at the door.
+                await Task.Delay(250, ct);
+                if (!await CalibrateAsync(ct)) return;
+                if (Math.Abs(Norm(toward - Forward)) <= 10) { AppLog.Add($"camera: looking at the gate ({(int)Forward}°) - the turn as last time"); return; }
+                AppLog.Add($"camera: the turn as last time ended {(int)Norm(toward - Forward)}° off - turning onto the gate");
             }
         }
         if (!known && !await CalibrateAsync(ct)) return;
@@ -424,7 +429,7 @@ sealed class Nav
         if (saved.Length == 3 && double.TryParse(saved[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sFrom)
             && double.TryParse(saved[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sTo)
             && double.TryParse(saved[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sPx)
-            && Math.Abs(Norm(startFwd - sFrom)) <= 30 && Math.Abs(Norm(toward - sTo)) <= 15 && Math.Abs(Norm(toward - startFwd)) > 12)
+            && remember && Math.Abs(Norm(startFwd - sFrom)) <= 30 && Math.Abs(Norm(toward - sTo)) <= 15 && Math.Abs(Norm(toward - startFwd)) > 12)
         {
             AppLog.Add("camera: the turn that faced the gate last time");
             Runner.ShowPhase("camera: turning to the gate");
@@ -437,10 +442,10 @@ sealed class Nav
         for (int i = 0; i < 6 && (DateTime.UtcNow - t0).TotalSeconds < 70; i++)
         {
             double err = Norm(toward - Forward);
-            if (Math.Abs(err) <= 12)
+            if (Math.Abs(err) <= 10)
             {
                 AppLog.Add($"camera: looking at the gate ({(int)Forward}°)");
-                if (Math.Abs(totalPx) > 1) Prefs.Edit()!.PutString(gkey, string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#},{1:0.#},{2:0.#}", startFwd, toward, totalPx))!.Apply();
+                if (remember && Math.Abs(totalPx) > 1) Prefs.Edit()!.PutString(gkey, string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#},{1:0.#},{2:0.#}", startFwd, toward, totalPx))!.Apply();
                 return;
             }
             Runner.ShowPhase(careful ? "camera: learning how this phone turns (first time only)" : "camera: turning to the gate");
