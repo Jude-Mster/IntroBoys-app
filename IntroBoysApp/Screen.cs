@@ -239,6 +239,18 @@ static class Screen
     {
         var f = await Capture.SnapAsync(C);
         double hp = Hp(layout, f);
+        // 1.6.7: the HP numbers on the bar ("22530/41450500") are the truth: the last few percent of a boss's HP are too thin to see as
+        // red (it walked away from a boss with 22 530 HP left). Read whenever the red is gone or nearly gone.
+        if (f != null && hp < 0.25)
+        {
+            var n = await BarNumbersAsync(layout, f);
+            if (n is { } v)
+            {
+                LastHpText = v.cur + "/" + v.max;
+                if (v.cur > 0) return (Math.Max(0.0005, Math.Min(1, v.cur / (double)v.max)), true);
+                return (-1, false);                      // 0/max: dead
+            }
+        }
         if (hp > 0 || !lookForName || f == null) return (hp, hp > 0);
         var box = layout.Find(BubbleKind.BossBar);
         if (box == null) return (hp, false);
@@ -251,6 +263,33 @@ static class Screen
     }
 
     public static double BossHp(BubbleLayout layout) => Hp(layout, Capture.Snap(C));
+
+    /// <summary>1.6.7: the last HP numbers read on the bar (for the log).</summary>
+    public static string LastHpText = "";
+
+    static readonly Regex HpNums = new(@"(\d[\d,.]{0,14})\s*/\s*(\d[\d,.]{2,14})", RegexOptions.Compiled);
+
+    /// <summary>1.6.7: "current / max" written on the boss bar, read around the member's bar box. Null when it can't be read.</summary>
+    static async Task<(long cur, long max)?> BarNumbersAsync(BubbleLayout layout, Frame f)
+    {
+        var box = layout.Find(BubbleKind.BossBar);
+        if (box == null) return null;
+        var (cx, cy) = layout.At(box, f.W, f.H);
+        var (bw, bh) = layout.SizeAt(box, f.W, f.H);
+        int h = (int)Math.Max(bh * 3, f.H * 0.045), w = (int)(bw * 1.15);
+        int x = (int)(cx - w / 2.0), y = (int)(cy - h / 2.0);
+        List<TextLine> lines;
+        try { lines = await Ocr.ReadAsync(f, x, y, w, h, Math.Min(f.W, f.H) < 1000 ? 3 : 2); } catch { return null; }
+        foreach (var l in lines)
+        {
+            var m = HpNums.Match(l.Text.Replace(" ", ""));
+            if (!m.Success) continue;
+            static long Num(string s) => long.TryParse(new string(s.Where(char.IsDigit).ToArray()), out var v) ? v : -1;
+            long cur = Num(m.Groups[1].Value), max = Num(m.Groups[2].Value);
+            if (max >= 100 && cur >= 0 && cur <= max) return (cur, max);
+        }
+        return null;
+    }
 
     static readonly Queue<(long at, double hp)> recent = new();
 

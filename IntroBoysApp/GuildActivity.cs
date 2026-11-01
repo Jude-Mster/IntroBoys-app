@@ -17,6 +17,7 @@ namespace IntroBoys.App;
 [Activity(Name = "com.blacklistintroboys.guild.GuildActivity", Label = "BLACKLIST", Icon = "@mipmap/ic_guild",
           MainLauncher = true, Exported = true, Theme = "@style/LaunchTheme", LaunchMode = LaunchMode.SingleTask,
           ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.KeyboardHidden)]
+[MetaData("android.app.shortcuts", Resource = "@xml/shortcuts")]
 public class GuildActivity : Activity
 {
     const string Start = LicenseConfig.SiteUrl + "/dashboard";

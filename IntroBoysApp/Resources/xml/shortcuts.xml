@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 1.6.7: long-press the BLACKLIST icon -> IntroBoys Assistant (LDPlayer's home screen shows only one icon of the app) -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <shortcut
+      android:shortcutId="assistant"
+      android:enabled="true"
+      android:icon="@mipmap/ic_assist"
+      android:shortcutShortLabel="@string/sc_assist_short"
+      android:shortcutLongLabel="@string/sc_assist_long">
+    <intent
+        android:action="android.intent.action.MAIN"
+        android:targetPackage="com.blacklistintroboys.guild"
+        android:targetClass="com.blacklistintroboys.guild.AssistantActivity" />
+  </shortcut>
+</shortcuts>

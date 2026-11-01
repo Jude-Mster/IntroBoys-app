@@ -421,7 +421,7 @@ static class RunEngine
                     // 1.6.3: the game keeps the dead boss's name in the target box - only the name, no red, kept it "alive": it swung on at a
                     // dead boss and stood there before walking on. On a phone that reads the red well (8+ red readings) a name without red
                     // counts as gone after 1.2 s when the boss was nearly dead, 6 s otherwise - counted from the last red seen.
-                    if (there && hp <= 0 && redReads >= 8 && (DateTime.UtcNow - lastRed).TotalSeconds >= (lo <= LowHp ? 1.2 : 6.0))
+                    if (there && hp <= 0 && redReads >= 8 && (DateTime.UtcNow - lastRed).TotalSeconds >= (lo <= LowHp ? 2.0 : 6.0))
                     {
                         there = false;
                         goneSince ??= lastRed;
@@ -490,7 +490,8 @@ static class RunEngine
             break;
         }
         if (hunt) { await Press(svc, layout, BubbleKind.AutoHunt); AppLog.Add("auto hunt: off"); }
-        AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s)");
+        AppLog.Add($"{name}: dead ({(int)(DateTime.UtcNow - start).TotalSeconds} s){(Screen.LastHpText.Length > 0 ? " - last HP read " + Screen.LastHpText : "")}");
+        Screen.LastHpText = "";
     }
 
     /// <summary>1.6.3: the bar is "nearly empty" below this (0.15 missed the end of a boss that dies in a few big hits).</summary>

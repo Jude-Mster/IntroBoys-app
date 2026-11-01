@@ -195,6 +195,7 @@ public class AssistantActivity : Activity
         run.AddView(showControl, Ui.Wide());
         runMsg = Ui.Text(c, "", 12, Ui.Muted);
         run.AddView(runMsg);
+        run.AddView(Ui.Button(c, "Copy the log", true, CopyLog), Ui.Wide());
         run.AddView(Ui.Button(c, "Share the log", false, ShareLog), Ui.Wide());
         col.AddView(run, Ui.Wide());
 
@@ -330,6 +331,19 @@ public class AssistantActivity : Activity
         }
         else i.PutExtra(Intent.ExtraText, "IntroBoys Assistant " + LicenseConfig.AppVersion + "\nphone: " + AppLog.Device() + "\n" + AppLog.All());
         Open(Intent.CreateChooser(i, "Share the log")!);
+    }
+
+    /// <summary>1.6.7: the whole log on the clipboard, ready to paste into Discord / Messenger / the chat.</summary>
+    void CopyLog()
+    {
+        string text = "IntroBoys Assistant " + LicenseConfig.AppVersion + " log\nphone: " + AppLog.Device() + "\n" + AppLog.All();
+        try
+        {
+            var cm = (ClipboardManager)GetSystemService(ClipboardService)!;
+            cm.PrimaryClip = ClipData.NewPlainText("IntroBoys Assistant log", text);
+            Toast.MakeText(this, "Log copied - paste it anywhere (" + text.Split('\n').Length + " lines)", ToastLength.Short)!.Show();
+        }
+        catch (Exception ex) { Toast.MakeText(this, "Couldn't copy the log: " + ex.Message, ToastLength.Long)!.Show(); }
     }
 
     void ToggleControl()
