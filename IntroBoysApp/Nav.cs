@@ -131,6 +131,9 @@ sealed class Stick
                     double ul = Math.Max(1, Math.Sqrt(ux * ux + uy * uy)); ux /= (float)ul; uy /= (float)ul;
                     int n = (int)Math.Min(3000, el * ((Piece - 100) / 100.0) / 3);
                     for (int i = 0; i < n; i++) { float k = i % 2 == 0 ? 1.5f : -1.5f; path.LineTo(tx + ux * k, ty + uy * k); }
+                    // 1.6.26: the piece must END exactly where the next one starts (tx, ty): it ended 1.5 px beside it, Android refused every
+                    // carried-on piece ("this phone drops the dragged touch") and the run fell back to lifting the thumb on every turn
+                    path.LineTo(tx, ty);
                 }
                 stroke = prev == null
                     ? new GestureDescription.StrokeDescription(path, 0, Piece, true)
