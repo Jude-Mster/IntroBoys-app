@@ -644,6 +644,8 @@ sealed class Nav
         double vx = 0, vy = 0;
         long lastCap = 0;
         bool firstFix = true;
+        Position fixFrom = default;
+        double fixStick = double.NaN;
         DateTime lastMoveAt = DateTime.UtcNow, lastRetouch = DateTime.MinValue;
         Position moveAnchor = p;
         DateTime? samePicSince = null;
@@ -679,7 +681,7 @@ sealed class Nav
                 // held up and turned by 10-25° to follow the corridor. So the stick is aimed by the measured camera (as before 1.6.15).
                 // 1.5.3: a small change of direction is not passed on (each new direction is a new drag of the thumb; constant tiny
                 // corrections made the run weave, most of all on slow phones where they arrive late)
-                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 6 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
+                if (!double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(s - prevStick)) < (Slow ? 10 : aim != null ? 4 : 6)) s = prevStick;      // 1.6.9: 4° on a recorded way (it threads between pillars)
                 // read the position while the stick is being pushed
                 stick.Hold(s);
                 // 1.4.5: a slow phone reads the screen at most twice a second while running (each picture of the screen held up the
@@ -729,10 +731,24 @@ sealed class Nav
                     await stick.RetouchAsync();
                 }
 
+                // 1.6.18: the camera after a fight: measured once over the first 250+ of the walk run with one stick angle (a long stretch:
+                // 1.6.17 took the first 100, which at the start of a run is mostly speeding up and reading lag, and threw the walk to boss 1
+                // into the wall). Only a real difference (over 5°) is put right, all at once.
+                if (firstFix)
+                {
+                    if (!fixFrom.Ok || double.IsNaN(fixStick) || Math.Abs(Norm(prevStick - fixStick)) > 6) { fixFrom = np; fixStick = prevStick; }
+                    else if (np.Dist(fixFrom.X, fixFrom.Y) >= 250)
+                    {
+                        double seen0 = MapAngle(np.X - fixFrom.X, np.Y - fixFrom.Y);
+                        double err0 = Norm(Norm(seen0 - hand * fixStick) - off);
+                        if (Math.Abs(err0) > 5 && Math.Abs(err0) < 60) { off = Norm(off + err0); AppLog.Add($"walk: the camera is {err0:0}° from where it was - corrected"); }
+                        firstFix = false;
+                    }
+                }
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
                 // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
-                if (moved > (Slow ? 100 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil)
+                if (moved > (Slow ? 120 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(prevStick - s)) < 12)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
                     // turned well away from "up" and the character went the mirrored way: the stick turns the other way round
@@ -755,7 +771,7 @@ sealed class Nav
                     if (Math.Abs(change) > 45 && !(bigChange != 0 && Math.Sign(bigChange) == Math.Sign(change))) bigChange = change;
                     // 1.6.17: the first stretch of a walk sets the camera outright: after a fight the camera is not where it was (to boss 2 it
                     // ran 7-10° east of the way from the first step, into the pillars beside it, and a 0.3 blend never caught up)
-                    else { off = Norm(off + change * (firstFix ? 1.0 : Slow ? 0.5 : 0.6)); bigChange = 0; if (firstFix && Math.Abs(change) > 4) AppLog.Add($"walk: the camera is {change:0}° from where it was - corrected"); firstFix = false; }
+                    else { off = Norm(off + change * (Slow ? 0.3 : 0.5)); bigChange = 0; }
                 }
                 // the speed between the last two pictures (taken when the reading started)
                 if (lastCap > 0)
