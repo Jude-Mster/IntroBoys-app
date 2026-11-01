@@ -183,6 +183,30 @@ static class Remote
                 if (msg.Length > 190) msg = msg.Substring(0, 190) + "…";
                 break;
             }
+            case "install_update":
+            {
+                // 1.6.6: install the newest build from the website (for when nobody is at the phone)
+                var ctx = Android.App.Application.Context;
+                var rel = await Updater.CheckAsync(ctx);
+                if (rel == null) { ok = true; msg = "already up to date (" + LicenseConfig.AppVersion + ")"; break; }
+                if (!Updater.CanInstall(ctx)) { ok = false; msg = "Android doesn't let the app install updates yet: on the phone, open the app and tap Update now once (it asks to allow it)"; break; }
+                if (Runner.Running) { Runner.Stop("Stopped to update (from the website)."); await Task.Delay(1500); }
+                AppLog.Add("website: installing update " + rel.Name);
+                try
+                {
+                    Updater.RemoteUntil = DateTime.UtcNow.AddMinutes(3);
+                    await Updater.InstallAsync(ctx, rel, _ => { }, CancellationToken.None, async () =>
+                    {
+                        // the answer goes to the site before Android replaces the app (it closes the app)
+                        lock (gate) results.Add(new Dictionary<string, object?> { ["id"] = id, ["ok"] = true, ["message"] = "installing " + rel.Name + " - the app restarts and is back online in about a minute" });
+                        id = "";
+                        for (int w = 0; w < 24; w++) { bool sent; lock (gate) sent = results.Count == 0; if (sent) break; await Task.Delay(500); }
+                    });
+                    ok = true; msg = "installing " + rel.Name;
+                }
+                catch (Exception ex) { ok = false; msg = "the update failed: " + ex.Message; AppLog.Add("update: " + ex.Message); }
+                break;
+            }
             default:
                 ok = false; msg = "this app version doesn't know \"" + cmd + "\"";
                 break;

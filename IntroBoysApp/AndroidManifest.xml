@@ -3,6 +3,7 @@
   <uses-permission android:name="android.permission.INTERNET" />
   <!-- updates from inside the app (Updater.cs): Android still asks the member to confirm each one -->
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
   <!-- "See the game": Android's screen sharing (Capture.cs) runs as a foreground service with a notification -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
