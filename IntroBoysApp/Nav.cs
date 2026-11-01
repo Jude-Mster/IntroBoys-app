@@ -506,6 +506,8 @@ sealed class Nav
     /// Through the dungeon's gate: pushes straight toward (x, y) and, while the gate is still shut (no progress), keeps facing it and
     /// waits instead of walking round. Done once the character is <paramref name="past"/> map units on its way.
     /// </summary>
+    const int GateY = 33460;
+
     public async Task<bool> GateAsync(int x, int y, double past, CancellationToken ct, double maxSecs = 70)
     {
         var p0 = await ReadAsync(ct);
@@ -514,6 +516,9 @@ sealed class Nav
         var start = DateTime.UtcNow;
         var lastMove = DateTime.UtcNow;
         bool waiting = false;
+        var refPos = p0;
+        int remeasured = 0;
+        last = p0;
         try
         {
             while ((DateTime.UtcNow - start).TotalSeconds < maxSecs)
@@ -529,8 +534,30 @@ sealed class Nav
                 if (np.Dist(p.X, p.Y) > 25) { lastMove = DateTime.UtcNow; if (waiting) { AppLog.Add("gate: open, going through"); waiting = false; } }
                 last = np;
                 if (d0 - np.Dist(x, y) >= past) { AppLog.Add($"gate: through ({np})"); return true; }
+                // 1.6.12: the way it really goes corrects the stick (the camera wasn't "as last time": it ran off to 3793 , 33956, into a
+                // pillar beside the entrance, and waited there for a "shut gate" it never reached)
+                if (np.Dist(refPos.X, refPos.Y) > 120)
+                {
+                    double seen = MapAngle(np.X - refPos.X, np.Y - refPos.Y), wantNow = MapAngle(x - refPos.X, y - refPos.Y);
+                    double err = Norm(seen - wantNow);
+                    if (Math.Abs(err) > 12) { off = Norm(off + err * 0.7); AppLog.Add($"gate: running {err:0}° off the way - corrected"); }
+                    refPos = np;
+                }
                 if ((DateTime.UtcNow - lastMove).TotalSeconds > 1.5 && !waiting)
                 {
+                    // the gate is a line across the corridor at y ~33460: standing still far from it is not a shut gate - the stick is
+                    // measured again (a step and back) and it goes on
+                    if (Math.Abs(np.Y - GateY) > 250 || Math.Abs(np.X - 3610) > 160)
+                    {
+                        if (++remeasured > 2) { AppLog.Add($"gate: stuck at {np}, not at the gate"); return false; }
+                        await stick.ReleaseAsync();
+                        AppLog.Add($"gate: not moving at {np}, away from the gate - checking which way the camera looks");
+                        if (!await CalibrateAsync(ct)) return false;
+                        lastMove = DateTime.UtcNow;
+                        var rp = await ReadAsync(ct, 1);
+                        if (rp.Ok) { last = rp; refPos = rp; }
+                        continue;
+                    }
                     waiting = true;
                     AppLog.Add("gate: shut, waiting for it to open");
                 }
