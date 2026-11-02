@@ -85,10 +85,33 @@ public static class License
                 if (id.Length < 8) { id = RandomHex(16); prefs.Edit()!.PutString("fallback_id", id)!.Apply(); }
                 id = "fallback|" + id;
             }
+            // 1.6.28: a copied emulator (LDPlayer's clone copies the phone's ID and this app's data) is told so by the site and
+            // takes an ID of its own; phones that were never copied keep the ID they always had (and their days)
+            string own = "";
+            try { own = Ctx.GetSharedPreferences("device", FileCreationMode.Private)!.GetString("copy_id", "") ?? ""; } catch { }
+            if (own.Length >= 8) id += "|copy|" + own;
             deviceId = Sha256Hex("bi-assistant-device-v1|android|" + id.ToLowerInvariant());
             return deviceId;
         }
     }
+
+    /// <summary>1.6.28: a new random id each time the app starts (never saved): two apps reporting as one device with different
+    /// ids means one is a copy.</summary>
+    public static readonly string RunId = RandomHex(8);
+
+    /// <summary>1.6.28: the site found this app is a copy of another phone (a cloned emulator): it becomes a device of its own.
+    /// The sign-in and the copied run counts are dropped; signing in again adds it as a new device (which needs its own days).</summary>
+    public static void BecomeOwnDevice()
+    {
+        if (Interlocked.Exchange(ref becameOwn, 1) == 1) return;
+        try { Ctx.GetSharedPreferences("device", FileCreationMode.Private)!.Edit()!.PutString("copy_id", RandomHex(16))!.Commit(); } catch { }
+        lock (gate) deviceId = null;
+        Runner.ResetTotals();
+        DropSignIn();
+        AppLog.Add("this emulator is a copy of another one (same ID and sign-in): it is now a device of its own - sign in again");
+        Set(LicenseState.SignedOut, "This emulator is a copy of another one, so it was signed out. Sign in again: it is now its own device on the guild site (it needs its own Assistant days).", "", 0);
+    }
+    static int becameOwn;
 
     static Context Ctx => Android.App.Application.Context;
 
@@ -175,7 +198,7 @@ public static class License
         Reply r;
         try
         {
-            r = await PostAsync("check", new Dictionary<string, object?> { ["action"] = "check", ["hwid"] = DeviceId, ["nonce"] = nonce, ["platform"] = LicenseConfig.Platform, ["app_version"] = LicenseConfig.AppVersion }, tok, ct);
+            r = await PostAsync("check", new Dictionary<string, object?> { ["action"] = "check", ["hwid"] = DeviceId, ["nonce"] = nonce, ["run"] = RunId, ["platform"] = LicenseConfig.Platform, ["app_version"] = LicenseConfig.AppVersion }, tok, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -476,7 +499,9 @@ public static class License
         lock (gate) tok = token;
         if (tok == null) return null;
         body["action"] = action;
+        body["run"] = RunId;
         var r = await PostAsync(action, body, tok, ct);
+        if (r.Status == 200 && Bool(r.Root, "clone")) { BecomeOwnDevice(); return null; }
         return r.Status == 200 ? r.Root : null;
     }
 

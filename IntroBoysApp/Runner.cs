@@ -42,6 +42,8 @@ static class Runner
     /// <summary>All-time finished runs on this phone.</summary>
     public static int TotalLabyrinth => Prefs.GetInt("total_laby", 0);
     public static int TotalDen => Prefs.GetInt("total_den", 0);
+    /// <summary>1.6.28: a copied emulator starts its own counts.</summary>
+    public static void ResetTotals() { Prefs.Edit()!.PutInt("total_laby", 0)!.PutInt("total_den", 0)!.Apply(); Raise(); }
     /// <summary>Called when a Labyrinth or Den run finishes.</summary>
     public static void CountRun(RunMode m)
     {
