@@ -376,12 +376,13 @@ static class RunEngine
                 if (fights > 5) break;
                 AppLog.Add($"LOD: watching {DenRespawnWait:0} s for the boss to respawn");
             }
-            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0);
+            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0, lootToo: den && fights > 0);
             if (den && fights > 0 && up == 0)
             {
                 AppLog.Add("LOD: no respawn");
                 // 1.6.5: after a respawn, one more loot burst (the respawned boss's drops were left lying: they landed after the pass)
-                if (fights > 1 && layout.Find(BubbleKind.AutoLoot) != null) { AppLog.Add("loot: one more pass for the respawned boss"); Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); }
+                // 1.6.31: after every Den run (not only after a respawn): anything still lying is picked up before the return scroll
+                if (layout.Find(BubbleKind.AutoLoot) != null) { AppLog.Add("loot: one more pass before leaving"); Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct, 8); }
                 break;
             }
             if (den && fights > 0 && up > 0) AppLog.Add($"LOD: the boss respawned ({fights}) - attacking it");
@@ -395,7 +396,7 @@ static class RunEngine
             await FightAsync(svc, layout, nav, name, ct);
             fights++;
             Runner.Kills++;
-            await LootAsync(svc, layout, ct);
+            await LootAsync(svc, layout, ct, full: den);
             if (!den) break;                    // the LOD boss may come back: watch a few seconds more
         }
         // 1.5.4: after the kill one quick look where the character is (a death in the fight wakes it up in town - it walked on to the
@@ -412,8 +413,9 @@ static class RunEngine
     /// Targets until the boss's HP bar shows (the boss spawned): 1. 0 when it didn't within <paramref name="secs"/>; -1 when the character
     /// is not in the dungeon any more (1.3.7: looked at every 5 s - it used to walk on toward the boss spot in town).
     /// </summary>
-    static async Task<int> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, bool den, CancellationToken ct, double targetEvery = 3.0)
+    static async Task<int> WaitForBossAsync(TapService svc, BubbleLayout layout, Nav nav, (int x, int y) spot, string name, double secs, bool den, CancellationToken ct, double targetEvery = 3.0, bool lootToo = false)
     {
+        var lootB = lootToo ? layout.Find(BubbleKind.AutoLoot) : null;
         Runner.SetPhase("waiting for " + name);
         var until = DateTime.UtcNow.AddSeconds(secs);
         var nextPlace = DateTime.UtcNow.AddSeconds(5);
@@ -432,6 +434,8 @@ static class RunEngine
                 var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
                 if (pl != Place.Unknown && pl != Target(den) && await OutsideAsync(nav, den, ct)) return -1;
             }
+            // 1.6.31: the Den's respawn watch also taps loot between the target presses (drops left from the kill are picked up)
+            if (lootB != null) { var (lw, lh) = svc.ScreenSize(); var (lx, ly) = layout.At(lootB, lw, lh); await svc.PressAsync(lx, ly, 60); }
             if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
             await Task.Delay(300, ct);
         }
@@ -699,11 +703,20 @@ static class RunEngine
     /// the count at the start of the fight; nothing new = no loot taps (it used to tap Auto loot 6 times after every kill). While
     /// looting it looks again every second tap and stops once the names are gone. A screen that can't be seen loots as before.
     /// </summary>
-    static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct)
+    static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct, bool full = false)
     {
         var loot = layout.Find(BubbleKind.AutoLoot);
         if (loot == null) return;
         await Task.Delay(1000, ct);                          // the drops show up a moment after the death (1.6.5: 1 s, was 0.5)
+        if (full)
+        {
+            // 1.6.31: the Den: the whole burst every time, whatever the ground looks like - the LOD boss drops several items, and on
+            // LDPlayer the first kill's drops (Ancient Platinum, a Lucky Box) were left lying when the boss came back
+            Runner.SetPhase("looting");
+            await Runner.LootBurstAsync(svc, layout, ct, 12);
+            AppLog.Add("loot: 12 taps (Den)");
+            return;
+        }
         int now = await Screen.GroundYellowAsync();
         if (now < 0 || lootBase < 0) { Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); return; }
         int thr = 18 + lootBase / 4;
