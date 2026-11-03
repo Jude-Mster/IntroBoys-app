@@ -13,6 +13,7 @@ static class RunEngine
     static readonly (int x, int y)[] LabySpots = { (3616, 28733), (3796, 22424), (3624, 16208), (3602, 9365), (3318, 1924) };
     static readonly (int x, int y) DenSpot = (1205, 2383);      // 1.3.7: where the character fights the LOD boss (PC 4.11.1)
     const double SpotTol = 150;               // close enough to a boss spot (map units)
+    const double DenTol = 70;                 // 1.6.29: the Den boss spot
     const double SpawnTimeout = 90;            // longest wait for a boss to show up
     const double FightTimeout = 480;           // longest fight (1.4.1: was 240 - boss 4 and 5 took longer on a weaker character and were left alive)
     const double GoneSecs = 3.0, NearDeadGoneSecs = 1.5;
@@ -329,7 +330,9 @@ static class RunEngine
                     }
                 }
             }
-            if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, SpotTol, ct) : await nav.WalkToAsync(spot.x, spot.y, SpotTol, ct)) { there = true; break; }
+            // 1.6.29: the Den spot with 70 (was 150: it stopped ~125 short of the boss, too far for the target key on LDPlayer)
+            double tol = den ? DenTol : SpotTol;
+            if (way.Count > 1 ? await nav.FollowAsync(way, spot.x, spot.y, tol, ct) : await nav.WalkToAsync(spot.x, spot.y, tol, ct)) { there = true; break; }
             var p = nav.Last;
             if (await OutsideAsync(nav, den, ct)) return false;
             // the character won't move: usually a boss or monster is still fighting it
@@ -409,6 +412,9 @@ static class RunEngine
         while (DateTime.UtcNow < until)
         {
             ct.ThrowIfCancellationRequested();
+            // 1.6.29: the target is pressed first, every time the character gets to the spot: a bar still up from before (another
+            // monster, the last boss) read as "the boss is up" without a press - it held ATK at nothing (Den, LDPlayer)
+            if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(targetEvery); await Task.Delay(350, ct); }
             if (await Screen.BossHpAsync(layout) > 0) { AppLog.Add($"{name}: HP bar up"); return 1; }
             if (DateTime.UtcNow >= nextPlace)
             {
@@ -416,7 +422,6 @@ static class RunEngine
                 var pl = Screen.PlaceOf(await nav.ReadAsync(ct, 1));
                 if (pl != Place.Unknown && pl != Target(den) && await OutsideAsync(nav, den, ct)) return -1;
             }
-            if (DateTime.UtcNow >= nextTarget) { await Press(svc, layout, BubbleKind.Target); nextTarget = DateTime.UtcNow.AddSeconds(targetEvery); }
             if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
             await Task.Delay(300, ct);
         }
@@ -450,6 +455,8 @@ static class RunEngine
         int confirmMisses = 0, redReads = 0;
         var lastRed = DateTime.UtcNow;
         var lastLootLook = DateTime.MinValue;
+        await Press(svc, layout, BubbleKind.Target);            // 1.6.29: the fight starts on the boss
+        var lastTargetAt = DateTime.UtcNow; int retargets = 0;
         while (true)
         {
             Runner.ShowPhase("fighting " + name);
@@ -493,11 +500,22 @@ static class RunEngine
             // 1.5.1: stop attacking the moment the bar is gone (half a second), not after the death has been made sure of: it kept
             // swinging for several seconds at a boss that was already dead. If the bar comes back, the attack goes on at once.
             bool GoneNow() => goneSince is DateTime gs && (DateTime.UtcNow - gs).TotalSeconds >= 0.5 && hi > 0;
+            // 1.6.29: no red bar for 2.5 s while attacking (nothing targeted, or the target lost): the target is pressed again
+            // (between two attack presses - a press during the held ATK would cancel it)
+            bool NeedTarget() => (DateTime.UtcNow - lastRed).TotalSeconds >= 2.5 && (DateTime.UtcNow - lastTargetAt).TotalSeconds >= 2.5;
             string? why = null;
             while (true)
             {
-                why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff || GoneNow(), ct);
+                why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff || GoneNow() || NeedTarget(), ct);
                 if (why != null || dead || DateTime.UtcNow >= nextBuff) break;
+                if (!GoneNow() && NeedTarget())
+                {
+                    lastTargetAt = DateTime.UtcNow;
+                    if (++retargets <= 3 || retargets % 10 == 0) AppLog.Add($"{name}: no HP bar while attacking - pressing target");
+                    await Press(svc, layout, BubbleKind.Target);
+                    await Task.Delay(300, ct);
+                    continue;
+                }
                 // the bar is gone: wait, without attacking, until the watcher is sure (dead) or the bar is back
                 var waitUntil = DateTime.UtcNow.AddSeconds(8);
                 while (!dead && goneSince != null && DateTime.UtcNow < waitUntil) await Task.Delay(100, ct);
