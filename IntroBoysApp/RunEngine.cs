@@ -11,6 +11,9 @@ static class RunEngine
 {
     // the five Labyrinth bosses and the Den (LOD) boss always spawn at the same place (from the PC Assistant)
     static readonly (int x, int y)[] LabySpots = { (3616, 28733), (3796, 22424), (3624, 16208), (3602, 9365), (3318, 1924) };
+    // 1.6.30: the Den's way, from the PC's map (navmap.json: the walk it recorded from the arrival at 1195 , 1578 straight up the hall,
+    // through the gate at ~2012, to the boss) - one line, nearly due north
+    static readonly (int x, int y)[] DenWay = { (1195, 1578), (1193, 1683), (1192, 1759), (1191, 1871), (1192, 2012), (1193, 2086), (1194, 2198), (1199, 2290), (1205, 2383) };
     static readonly (int x, int y) DenSpot = (1205, 2383);      // 1.3.7: where the character fights the LOD boss (PC 4.11.1)
     const double SpotTol = 150;               // close enough to a boss spot (map units)
     const double DenTol = 70;                 // 1.6.29: the Den boss spot
@@ -232,13 +235,20 @@ static class RunEngine
     /// </summary>
     static async Task ArriveAsync(TapService svc, BubbleLayout layout, Nav nav, bool den, CancellationToken ct)
     {
-        Runner.SetPhase("finding the gate");
+        Runner.SetPhase(den ? "facing the Den boss" : "finding the gate");
         await Task.Delay(1200, ct);
         await nav.ZoomOutAsync(ct);
         nav.Forget();                                         // 1.5.4: the camera starts afresh after every teleport
         var p = await nav.ReadAsync(ct);
         if (!p.Ok) return;
         var (tx, ty) = den ? DenSpot : LabySpots[0];
+        if (den)
+        {
+            // 1.6.30: the Den: face the boss's way (the turn remembered from last time, no test step) and walk the PC's way straight to
+            // the boss - no gate push of its own (it stopped and started there), no measuring steps
+            await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct, place: "_den", verify: false);
+            return;
+        }
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
         // 1.6.2: the gate opens 30 s after coming in - on EVERY run (every run is a Labyrinth of its own): wait it out, then run
         if (!den)
@@ -312,13 +322,13 @@ static class RunEngine
             // 1.6.0: the PC's recorded ways between the bosses (not the first one, from the entrance: that is walked straight)
             // 1.6.9: the PC's recorded ways from macros.json for every boss, the first one too from the gate on (only its part past the
             // gate: y < 33380) - the straight walk from the gate drifted into the corridor walls (3800 , 30360 and 3816 , 31927)
-            var way = den ? new List<(int x, int y)>() : routeIndex >= 1 ? Route(routeIndex) : Route(0).Where(q => q.y < 33380).ToList();
+            var way = den ? DenWay.ToList() : routeIndex >= 1 ? Route(routeIndex) : Route(0).Where(q => q.y < 33380).ToList();
             // 1.6.11: the PC's map (navmap.json). No recorded way (the Den), a recorded way that starts further on (boss 1 -> 2), or a walk
             // that failed: the way is planned over the stretches the PC really walked, from where the character is now
             if (here0.Ok && NavMap.Ready)
             {
                 double toStart = way.Count > 1 ? way.Min(q => here0.Dist(q.x, q.y)) : double.MaxValue;
-                if (way.Count <= 1 || tries >= 1 || toStart > 400)
+                if (way.Count <= 1 || (tries >= 1 && !den) || (den && tries >= 2) || toStart > 400)
                 {
                     var (gx, gy) = way.Count > 1 && tries == 0 ? way[0] : spot;
                     var plan = NavMap.Plan(here0.X, here0.Y, gx, gy);

@@ -410,7 +410,7 @@ sealed class Nav
     /// After the teleport: turns the camera (it never walks for this) until it looks toward the map direction <paramref name="toward"/>,
     /// the way the member finds the door by turning the view. How far a camera drag turns is measured once and remembered.
     /// </summary>
-    public async Task AlignAsync(double toward, CancellationToken ct, bool remember = true)
+    public async Task AlignAsync(double toward, CancellationToken ct, bool remember = true, string place = "", bool verify = true)
     {
         var cam = layout.Find(BubbleKind.Camera);
         if (cam == null) { AppLog.Add("camera: no camera area placed, can't turn the view"); return; }
@@ -420,7 +420,10 @@ sealed class Nav
         if (!known && Prefs.GetInt("nav_hand", 0) != 0)
         {
             var (sw0, sh0) = svc.ScreenSize();
-            var sv = (Prefs.GetString($"gate_turn_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}", "") ?? "").Split(',');
+            // 1.6.30: the Den keeps its own turn (it shared the Labyrinth's: every switch between the two measured afresh); a Den turn
+            // saved under the shared name before is still used
+            string k0 = $"gate_turn_{Math.Max(sw0, sh0)}x{Math.Min(sw0, sh0)}";
+            var sv = (Prefs.GetString(k0 + place, "") is { Length: > 0 } own ? own : Prefs.GetString(k0, "") ?? "").Split(',');
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             if (sv.Length == 3 && double.TryParse(sv[1], System.Globalization.NumberStyles.Float, inv, out double gTo)
                 && double.TryParse(sv[2], System.Globalization.NumberStyles.Float, inv, out double gPx) && Math.Abs(Norm(toward - gTo)) <= 15)
@@ -430,6 +433,8 @@ sealed class Nav
                 hand = Prefs.GetInt("nav_hand", 1);
                 off = Norm(toward - hand * 90);                 // Forward = the gate's direction
                 known = true;
+                // 1.6.30: the Den: no test step - it walks off at once and the walk corrects the direction from how it really moves
+                if (!verify) { AppLog.Add($"camera: the turn as last time - walking straight off ({(int)Forward}°)"); return; }
                 // 1.6.22: checked with a test step (the countdown is running anyway): the same drag doesn't always land on the gate - the
                 // view after the teleport isn't always the same, and twice it ended 40-49° off (the run then went at the wall and stopped).
                 // Then it is turned onto the gate below, like 1.6.12 runs that went straight at the door.
@@ -465,7 +470,7 @@ sealed class Nav
         bool careful = false;
         // 1.4.4: the view after the teleport is the same every time, so the drag that turned it onto the gate last time is used
         // again straight away (one turn and one look, instead of learning it every run - on the cloud phone each look takes ~15 s)
-        string gkey = $"gate_turn_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}";
+        string gkey = $"gate_turn_{Math.Max(sw, sh)}x{Math.Min(sw, sh)}" + place;
         double startFwd = Forward, totalPx = 0;
         var saved = (Prefs.GetString(gkey, "") ?? "").Split(',');
         if (saved.Length == 3 && double.TryParse(saved[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sFrom)
