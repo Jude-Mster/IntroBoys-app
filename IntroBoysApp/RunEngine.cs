@@ -393,7 +393,7 @@ static class RunEngine
                 break;
             }
             await BuffAsync(svc, layout, nav, ct);
-            await FightAsync(svc, layout, nav, name, ct);
+            await FightAsync(svc, layout, nav, name, ct, den);
             fights++;
             Runner.Kills++;
             await LootAsync(svc, layout, ct, full: den);
@@ -447,8 +447,12 @@ static class RunEngine
     /// (the bar can read empty while the boss lives): 1.5 s after it was nearly dead, 3 s otherwise, 5 s in the first 8 s of a fight;
     /// then the target is pressed once more to be sure.
     /// </summary>
-    static async Task FightAsync(TapService svc, BubbleLayout layout, Nav nav, string name, CancellationToken ct)
+    static async Task FightAsync(TapService svc, BubbleLayout layout, Nav nav, string name, CancellationToken ct, bool den = false)
     {
+        // 1.6.32: the LOD boss (44.5 M HP) takes ~10 min alone (480 s left it at 10 % and the run walked away); in the Den the fight
+        // only ends early when its HP has not gone down for 2 minutes
+        double maxSecs = den ? 1800 : FightTimeout;
+        double bestLo = 1; var loDropAt = DateTime.UtcNow;
         Runner.SetPhase("fighting " + name);
         var start = DateTime.UtcNow;
         var fightLayout = layout.Copy();
@@ -507,7 +511,9 @@ static class RunEngine
                     double need = lo <= LowHp && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
                     if (secs < 8) need = Math.Max(need, 5);
                     if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= need) { dead = true; return; }
-                    if (secs > FightTimeout) { AppLog.Add($"{name}: fight took too long, going on"); dead = true; return; }
+                    if (lo < bestLo - 0.002) { bestLo = lo; loDropAt = DateTime.UtcNow; }
+                    if (secs > maxSecs || (den && secs > 240 && (DateTime.UtcNow - loDropAt).TotalSeconds > 120))
+                    { AppLog.Add($"{name}: fight took too long{(den && secs <= maxSecs ? " (its HP stopped going down)" : "")}, going on"); dead = true; return; }
                     try { await Task.Delay(200, watch.Token); } catch { return; }
                 }
             });
@@ -544,7 +550,7 @@ static class RunEngine
                 nextBuff = NextBuff();
                 continue;
             }
-            if ((DateTime.UtcNow - start).TotalSeconds >= FightTimeout) break;
+            if ((DateTime.UtcNow - start).TotalSeconds >= maxSecs) break;
             // make sure: target once more and look again; a boss that is still there shows its bar or its name again.
             // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss.
             // 1.4.0: after a boss that was nearly dead the check is one quick look (it is over: on to the next boss at once), else three
@@ -713,8 +719,17 @@ static class RunEngine
             // 1.6.31: the Den: the whole burst every time, whatever the ground looks like - the LOD boss drops several items, and on
             // LDPlayer the first kill's drops (Ancient Platinum, a Lucky Box) were left lying when the boss came back
             Runner.SetPhase("looting");
-            await Runner.LootBurstAsync(svc, layout, ct, 12);
-            AppLog.Add("loot: 12 taps (Den)");
+            int before = await Screen.GroundYellowAsync();
+            int went = await Runner.LootBurstAsync(svc, layout, ct, 12);
+            int after = await Screen.GroundYellowAsync();
+            AppLog.Add($"loot: 12 taps (Den){(went < 12 ? $" - {12 - went} cancelled by Android" : "")}; ground {before} -> {after} (bare {lootBase})");
+            // 1.6.32: still items lying (more yellow than the bare ground): 12 more
+            if (after >= 0 && lootBase >= 0 && after > lootBase + 18 + lootBase / 4)
+            {
+                await Task.Delay(500, ct);
+                went = await Runner.LootBurstAsync(svc, layout, ct, 12);
+                AppLog.Add($"loot: items still on the ground - 12 more taps{(went < 12 ? $" ({12 - went} cancelled)" : "")}; ground now {await Screen.GroundYellowAsync()}");
+            }
             return;
         }
         int now = await Screen.GroundYellowAsync();

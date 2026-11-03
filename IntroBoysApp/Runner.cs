@@ -185,18 +185,21 @@ static class Runner
     /// pressed once), otherwise why it had to stop.
     /// </summary>
     /// <summary>Loot after a kill: the Auto loot bubble, every 400 ms, about 3 seconds.</summary>
-    public static async Task LootBurstAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int taps = 6)
+    /// <summary>Taps the loot bubble; returns how many taps Android let through (1.6.32: 120 ms each, was 60).</summary>
+    public static async Task<int> LootBurstAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int taps = 6)
     {
         var loot = layout.Find(BubbleKind.AutoLoot);
-        if (loot == null) return;
+        if (loot == null) return 0;
         var (w, h) = svc.ScreenSize();
         var (x, y) = layout.At(loot, w, h);
+        int ok = 0;
         for (int i = 0; i < taps; i++)
         {
             ct.ThrowIfCancellationRequested();
-            await svc.PressAsync(x, y, 60);
-            await Task.Delay(340, ct);
+            if (await svc.PressAsync(x, y, 120)) ok++;
+            await Task.Delay(300, ct);
         }
+        return ok;
     }
 
     public static async Task<string?> PressUntil(TapService svc, BubbleLayout layout, Func<bool> done, CancellationToken ct)
