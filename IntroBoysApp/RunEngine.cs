@@ -373,16 +373,14 @@ static class RunEngine
             // target pressed every second; a respawned boss is fought and looted the same way, up to 5 times; then the return scroll
             if (den && fights > 0)
             {
-                if (fights > 5) break;
+                // 1.6.33: the member's rule: the first boss, then its respawn (the second) - both looted - then town
+                if (fights >= 2) { AppLog.Add("LOD: both bosses done - looted, back to town"); break; }
                 AppLog.Add($"LOD: watching {DenRespawnWait:0} s for the boss to respawn");
             }
-            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0, lootToo: den && fights > 0);
+            int up = await WaitForBossAsync(svc, layout, nav, spot, name, fights == 0 ? SpawnTimeout : DenRespawnWait, den, ct, fights > 0 ? 1.0 : 3.0);
             if (den && fights > 0 && up == 0)
             {
-                AppLog.Add("LOD: no respawn");
-                // 1.6.5: after a respawn, one more loot burst (the respawned boss's drops were left lying: they landed after the pass)
-                // 1.6.31: after every Den run (not only after a respawn): anything still lying is picked up before the return scroll
-                if (layout.Find(BubbleKind.AutoLoot) != null) { AppLog.Add("loot: one more pass before leaving"); Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct, 8); }
+                AppLog.Add("LOD: no respawn - back to town");
                 break;
             }
             if (den && fights > 0 && up > 0) AppLog.Add($"LOD: the boss respawned ({fights}) - attacking it");
@@ -716,20 +714,27 @@ static class RunEngine
         await Task.Delay(1000, ct);                          // the drops show up a moment after the death (1.6.5: 1 s, was 0.5)
         if (full)
         {
-            // 1.6.31: the Den: the whole burst every time, whatever the ground looks like - the LOD boss drops several items, and on
-            // LDPlayer the first kill's drops (Ancient Platinum, a Lucky Box) were left lying when the boss came back
+            // 1.6.33: the Den: everything is picked up before anything else (the respawn watch, the return scroll). It looks at the
+            // ground, taps 4 at a time and looks again, until the ground is back to bare (as before the fight) - at least 12 taps,
+            // at most 40 (~17 s); drops still landing after a moment are waited for once
             Runner.SetPhase("looting");
-            int before = await Screen.GroundYellowAsync();
-            int went = await Runner.LootBurstAsync(svc, layout, ct, 12);
-            int after = await Screen.GroundYellowAsync();
-            AppLog.Add($"loot: 12 taps (Den){(went < 12 ? $" - {12 - went} cancelled by Android" : "")}; ground {before} -> {after} (bare {lootBase})");
-            // 1.6.32: still items lying (more yellow than the bare ground): 12 more
-            if (after >= 0 && lootBase >= 0 && after > lootBase + 18 + lootBase / 4)
+            await Task.Delay(500, ct);                       // the LOD boss's drops land over a moment
+            int thrD = 18 + Math.Max(0, lootBase) / 4;
+            int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clearLooks = 0;
+            bool canSee = first >= 0 && lootBase >= 0;
+            while (taps < 40)
             {
-                await Task.Delay(500, ct);
-                went = await Runner.LootBurstAsync(svc, layout, ct, 12);
-                AppLog.Add($"loot: items still on the ground - 12 more taps{(went < 12 ? $" ({12 - went} cancelled)" : "")}; ground now {await Screen.GroundYellowAsync()}");
+                went += await Runner.LootBurstAsync(svc, layout, ct, 4);
+                taps += 4;
+                if (taps < 12) continue;
+                if (!canSee) { if (taps >= 20) break; continue; }
+                int g = await Screen.GroundYellowAsync();
+                if (g >= 0 && g <= lootBase + thrD / 2) { if (++clearLooks >= 2) break; await Task.Delay(400, ct); }    // clear twice in a row
+                else clearLooks = 0;
             }
+            int last = await Screen.GroundYellowAsync();
+            AppLog.Add($"loot: {taps} taps{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
+                (!canSee ? "the ground can't be read here" : last <= lootBase + thrD / 2 ? $"the ground is clear (items {first} -> {last}, bare {lootBase})" : $"items still seen on the ground ({first} -> {last}, bare {lootBase})"));
             return;
         }
         int now = await Screen.GroundYellowAsync();
