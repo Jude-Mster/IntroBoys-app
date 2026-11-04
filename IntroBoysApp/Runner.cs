@@ -157,6 +157,7 @@ static class Runner
             while (!ct.IsCancellationRequested)
             {
                 bool died = false; double seen = 0; DateTime? gone = null;
+                int bare = await Screen.GroundYellowAsync();          // 1.6.34: the ground before this kill (for the loot rule)
                 using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var watcher = Task.Run(async () =>
                 {
@@ -172,7 +173,7 @@ static class Runner
                 watch.Cancel();
                 try { await watcher; } catch { }
                 if (why != null) { Stop(why); return; }
-                if (died) { Kills++; AppLog.Add("target died: looting"); await LootBurstAsync(svc, layout, ct); }
+                if (died) { Kills++; AppLog.Add("target died: looting"); await RunEngine.LootAllAsync(svc, layout, ct, bare); }
             }
         }
         catch (System.OperationCanceledException) { }

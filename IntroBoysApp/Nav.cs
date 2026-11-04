@@ -328,6 +328,13 @@ sealed class Nav
                 fwd = one;
             }
         }
+        else if (fwd != null)
+        {
+            // 1.6.34: the first measure steps back too (it was left ~230 off its way - the Den started 230 behind where it stood), and
+            // the two steps are averaged when they agree
+            var back = await StepAsync(270, ct);
+            if (back != null && Math.Abs(Norm(fwd.Value - (back.Value + 180))) <= 40) fwd = Norm(fwd.Value + Norm(back.Value + 180 - fwd.Value) / 2);
+        }
         if (fwd == null) { var back = await StepAsync(270, ct); if (back != null) fwd = Norm(back.Value + 180); }
         if (fwd == null) { AppLog.Add("walk: couldn't measure the stick (blocked, or the position can't be read)"); return false; }
         if (Prefs.GetInt("nav_hand", 0) == 0)

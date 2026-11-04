@@ -352,7 +352,6 @@ static class RunEngine
             {
                 AppLog.Add($"walk to {name}: something is still fighting us, finishing it first");
                 await FightAsync(svc, layout, nav, "the target", ct);
-                await LootAsync(svc, layout, ct);
             }
             Runner.SetPhase($"walking to {name} (again)");
         }
@@ -391,10 +390,9 @@ static class RunEngine
                 break;
             }
             await BuffAsync(svc, layout, nav, ct);
-            await FightAsync(svc, layout, nav, name, ct, den);
+            await FightAsync(svc, layout, nav, name, ct, den);    // 1.6.34: it loots each kill itself, at once
             fights++;
             Runner.Kills++;
-            await LootAsync(svc, layout, ct, full: den);
             if (!den) break;                    // the LOD boss may come back: watch a few seconds more
         }
         // 1.5.4: after the kill one quick look where the character is (a death in the fight wakes it up in town - it walked on to the
@@ -434,7 +432,14 @@ static class RunEngine
             }
             // 1.6.31: the Den's respawn watch also taps loot between the target presses (drops left from the kill are picked up)
             if (lootB != null) { var (lw, lh) = svc.ScreenSize(); var (lx, ly) = layout.At(lootB, lw, lh); await svc.PressAsync(lx, ly, 60); }
-            if (DateTime.UtcNow >= nextHold) { await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct); nextHold = DateTime.UtcNow.AddSeconds(4); }
+            if (DateTime.UtcNow >= nextHold)
+            {
+                nextHold = DateTime.UtcNow.AddSeconds(4);
+                // 1.6.34: only back to the spot when it is near (a kick to town read as "pushed off the spot": it walked 17 181 at the boss)
+                var hp0 = await nav.ReadAsync(ct, 1);
+                if (hp0.Ok && hp0.Dist(spot.x, spot.y) > 1500) { if (await OutsideAsync(nav, den, ct)) return -1; }
+                else await nav.HoldAsync(spot.x, spot.y, SpotTol * 2, ct);
+            }
             await Task.Delay(300, ct);
         }
         return 0;
@@ -450,7 +455,7 @@ static class RunEngine
         // 1.6.32: the LOD boss (44.5 M HP) takes ~10 min alone (480 s left it at 10 % and the run walked away); in the Den the fight
         // only ends early when its HP has not gone down for 2 minutes
         double maxSecs = den ? 1800 : FightTimeout;
-        double bestLo = 1; var loDropAt = DateTime.UtcNow;
+        bool timedOut = false;
         Runner.SetPhase("fighting " + name);
         var start = DateTime.UtcNow;
         var fightLayout = layout.Copy();
@@ -509,9 +514,8 @@ static class RunEngine
                     double need = lo <= LowHp && hi >= 0.30 ? 1.5 : hi > 0 ? 3.0 : 6.0;     // never saw red: look longer
                     if (secs < 8) need = Math.Max(need, 5);
                     if (goneSince is DateTime g && (DateTime.UtcNow - g).TotalSeconds >= need) { dead = true; return; }
-                    if (lo < bestLo - 0.002) { bestLo = lo; loDropAt = DateTime.UtcNow; }
-                    if (secs > maxSecs || (den && secs > 240 && (DateTime.UtcNow - loDropAt).TotalSeconds > 120))
-                    { AppLog.Add($"{name}: fight took too long{(den && secs <= maxSecs ? " (its HP stopped going down)" : "")}, going on"); dead = true; return; }
+                    // 1.6.34: no "HP stopped going down" rule any more (the red bar reads too unevenly: it fired every 2 s from 45 % on)
+                    if (secs > maxSecs) { AppLog.Add($"{name}: fight took too long, going on"); timedOut = true; dead = true; return; }
                     try { await Task.Delay(200, watch.Token); } catch { return; }
                 }
             });
@@ -548,7 +552,11 @@ static class RunEngine
                 nextBuff = NextBuff();
                 continue;
             }
-            if ((DateTime.UtcNow - start).TotalSeconds >= maxSecs) break;
+            if (timedOut || (DateTime.UtcNow - start).TotalSeconds >= maxSecs) break;
+            // 1.6.34: the member's loot rule, for every kill: the moment it is dead, stop and pick everything up - BEFORE the target is
+            // pressed again (that press found the Den boss's instant respawn: it fought on and the first kill's drops were left lying)
+            await LootAllAsync(svc, layout, ct);
+            if (den) break;                                    // the Den: the respawn watch (target pressed) checks what is left
             // make sure: target once more and look again; a boss that is still there shows its bar or its name again.
             // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss.
             // 1.4.0: after a boss that was nearly dead the check is one quick look (it is over: on to the next boss at once), else three
@@ -703,67 +711,32 @@ static class RunEngine
     static int lootBase = -1;
 
     /// <summary>
-    /// 1.5.1: loot only when something lies on the ground. The yellow item names around the character are counted and compared with
-    /// the count at the start of the fight; nothing new = no loot taps (it used to tap Auto loot 6 times after every kill). While
-    /// looting it looks again every second tap and stops once the names are gone. A screen that can't be seen loots as before.
+    /// 1.6.34: the loot rule for every kill (the bosses, the Den boss and its respawn, monsters in auto attack): the drops land at once, so
+    /// it starts straight away, taps loot 4 at a time and looks at the ground, until the ground is as bare as before the fight two looks
+    /// in a row - at least 8 taps, at most 40 (~17 s). Where the ground can't be read, 16 taps.
     /// </summary>
-    static async Task LootAsync(TapService svc, BubbleLayout layout, CancellationToken ct, bool full = false)
+    internal static async Task LootAllAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int bare = int.MinValue)
     {
-        var loot = layout.Find(BubbleKind.AutoLoot);
-        if (loot == null) return;
-        await Task.Delay(1000, ct);                          // the drops show up a moment after the death (1.6.5: 1 s, was 0.5)
-        if (full)
-        {
-            // 1.6.33: the Den: everything is picked up before anything else (the respawn watch, the return scroll). It looks at the
-            // ground, taps 4 at a time and looks again, until the ground is back to bare (as before the fight) - at least 12 taps,
-            // at most 40 (~17 s); drops still landing after a moment are waited for once
-            Runner.SetPhase("looting");
-            await Task.Delay(500, ct);                       // the LOD boss's drops land over a moment
-            int thrD = 18 + Math.Max(0, lootBase) / 4;
-            int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clearLooks = 0;
-            bool canSee = first >= 0 && lootBase >= 0;
-            while (taps < 40)
-            {
-                went += await Runner.LootBurstAsync(svc, layout, ct, 4);
-                taps += 4;
-                if (taps < 12) continue;
-                if (!canSee) { if (taps >= 20) break; continue; }
-                int g = await Screen.GroundYellowAsync();
-                if (g >= 0 && g <= lootBase + thrD / 2) { if (++clearLooks >= 2) break; await Task.Delay(400, ct); }    // clear twice in a row
-                else clearLooks = 0;
-            }
-            int last = await Screen.GroundYellowAsync();
-            AppLog.Add($"loot: {taps} taps{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
-                (!canSee ? "the ground can't be read here" : last <= lootBase + thrD / 2 ? $"the ground is clear (items {first} -> {last}, bare {lootBase})" : $"items still seen on the ground ({first} -> {last}, bare {lootBase})"));
-            return;
-        }
-        int now = await Screen.GroundYellowAsync();
-        if (now < 0 || lootBase < 0) { Runner.SetPhase("looting"); await Runner.LootBurstAsync(svc, layout, ct); return; }
-        int thr = 18 + lootBase / 4;
-        if (now <= lootBase + thr)
-        {
-            await Task.Delay(400, ct);
-            now = await Screen.GroundYellowAsync();          // one more look (the items may be a moment late)
-            if (now <= lootBase + thr)
-            {
-                // 1.6.27: two taps anyway (1 s): "nothing on the ground" was most kills in 11 runs, and a drop that isn't seen is lost
-                AppLog.Add("loot: nothing seen on the ground - two taps to be sure");
-                var (lw, lh) = svc.ScreenSize();
-                var (lx, ly) = layout.At(loot, lw, lh);
-                for (int i = 0; i < 2; i++) { await svc.PressAsync(lx, ly, 60); await Task.Delay(350, ct); }
-                return;
-            }
-        }
+        if (layout.Find(BubbleKind.AutoLoot) == null) return;
+        if (bare != int.MinValue) lootBase = bare;
         Runner.SetPhase("looting");
-        var (w, h) = svc.ScreenSize();
-        var (x, y) = layout.At(loot, w, h);
-        for (int i = 1; i <= 10; i++)
+        await Task.Delay(150, ct);
+        int thr = 18 + Math.Max(0, lootBase) / 4;
+        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0;
+        bool canSee = first >= 0 && lootBase >= 0;
+        while (taps < 40)
         {
-            await svc.PressAsync(x, y, 60);
-            await Task.Delay(340, ct);
-            if (i % 2 == 0 && (now = await Screen.GroundYellowAsync()) >= 0 && now <= lootBase + thr / 2) { AppLog.Add($"loot: picked up ({i} taps)"); return; }
+            went += await Runner.LootBurstAsync(svc, layout, ct, 4);
+            taps += 4;
+            if (!canSee) { if (taps >= 16) break; continue; }
+            if (taps < 8) continue;
+            int g = await Screen.GroundYellowAsync();
+            if (g >= 0 && g <= lootBase + thr / 2) { if (++clear >= 2) break; }
+            else clear = 0;
         }
-        AppLog.Add("loot: done (10 taps)");
+        int last = canSee ? await Screen.GroundYellowAsync() : -1;
+        AppLog.Add($"loot: {taps} taps{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
+            (!canSee ? "the ground can't be read here" : last <= lootBase + thr / 2 ? $"the ground is clear ({first} -> {last}, bare {lootBase})" : $"items still seen ({first} -> {last}, bare {lootBase})"));
     }
 
     /// <summary>
