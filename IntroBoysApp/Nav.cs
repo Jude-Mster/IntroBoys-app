@@ -977,6 +977,9 @@ sealed class Nav
         return await WalkToAsync(x, y, tol, ct, 150, aim: Aim);
     }
 
+    /// <summary>1.6.35: a short push of the stick toward a point on the screen (0 = right, 90 = up): walking up to the loot.</summary>
+    public Task<bool> StepTowardAsync(double angle, long ms) => stick.PushAsync(angle, ms);
+
     /// <summary>A few steps backwards (away from what the camera looks at): room to buff.</summary>
     public async Task StepAwayAsync(CancellationToken ct)
     {

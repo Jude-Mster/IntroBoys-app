@@ -555,7 +555,7 @@ static class RunEngine
             if (timedOut || (DateTime.UtcNow - start).TotalSeconds >= maxSecs) break;
             // 1.6.34: the member's loot rule, for every kill: the moment it is dead, stop and pick everything up - BEFORE the target is
             // pressed again (that press found the Den boss's instant respawn: it fought on and the first kill's drops were left lying)
-            await LootAllAsync(svc, layout, ct);
+            await LootAllAsync(svc, layout, ct, nav: nav);
             if (den) break;                                    // the Den: the respawn watch (target pressed) checks what is left
             // make sure: target once more and look again; a boss that is still there shows its bar or its name again.
             // 1.3.8: one look was not enough - a missed read made the run walk away from a living boss.
@@ -713,29 +713,48 @@ static class RunEngine
     /// <summary>
     /// 1.6.34: the loot rule for every kill (the bosses, the Den boss and its respawn, monsters in auto attack): the drops land at once, so
     /// it starts straight away, taps loot 4 at a time and looks at the ground, until the ground is as bare as before the fight two looks
-    /// in a row - at least 8 taps, at most 40 (~17 s). Where the ground can't be read, 16 taps.
+    /// in a row. Where the ground can't be read, 16 taps.
+    /// 1.6.35: the member's rule: get close to the loot. The Den boss's drops scatter wider than auto loot reaches, so while items are
+    /// still seen the character walks toward them (a short push on the stick toward the middle of the yellow labels, up to 8 steps)
+    /// and loots again - at most 64 taps then.
     /// </summary>
-    internal static async Task LootAllAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int bare = int.MinValue)
+    internal static async Task LootAllAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int bare = int.MinValue, Nav? nav = null)
     {
         if (layout.Find(BubbleKind.AutoLoot) == null) return;
         if (bare != int.MinValue) lootBase = bare;
         Runner.SetPhase("looting");
         await Task.Delay(150, ct);
         int thr = 18 + Math.Max(0, lootBase) / 4;
-        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0;
+        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0, steps = 0;
         bool canSee = first >= 0 && lootBase >= 0;
-        while (taps < 40)
+        while (taps < (steps > 0 ? 64 : 40))
         {
             went += await Runner.LootBurstAsync(svc, layout, ct, 4);
             taps += 4;
             if (!canSee) { if (taps >= 16) break; continue; }
             if (taps < 8) continue;
             int g = await Screen.GroundYellowAsync();
-            if (g >= 0 && g <= lootBase + thr / 2) { if (++clear >= 2) break; }
-            else clear = 0;
+            if (g >= 0 && g <= lootBase + thr / 2) { if (++clear >= 2) break; continue; }
+            clear = 0;
+            // items are still lying there: walk up to them when they are not right at the character's feet
+            if (nav != null && steps < 8)
+            {
+                var spot = await Screen.LootSpotAsync();
+                if (spot.ok && spot.dist > spot.w * 0.07)
+                {
+                    double angle = Math.Atan2(-spot.dy, spot.dx) * 180 / Math.PI;
+                    long ms = (long)Math.Clamp(spot.dist / (spot.w * 0.3) * 700, 250, 900);
+                    steps++;
+                    Runner.SetPhase("walking to the loot");
+                    if (steps <= 3) AppLog.Add($"loot: items {(int)spot.dist} px away (angle {angle:0}) - walking closer ({ms} ms)");
+                    await nav.StepTowardAsync(angle, ms);
+                    await Task.Delay(200, ct);
+                    Runner.SetPhase("looting");
+                }
+            }
         }
         int last = canSee ? await Screen.GroundYellowAsync() : -1;
-        AppLog.Add($"loot: {taps} taps{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
+        AppLog.Add($"loot: {taps} taps{(steps > 0 ? $", {steps} steps toward the items" : "")}{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
             (!canSee ? "the ground can't be read here" : last <= lootBase + thr / 2 ? $"the ground is clear ({first} -> {last}, bare {lootBase})" : $"items still seen ({first} -> {last}, bare {lootBase})"));
     }
 

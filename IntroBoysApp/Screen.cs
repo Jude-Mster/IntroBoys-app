@@ -375,6 +375,38 @@ static class Screen
         return n;
     }
 
+    /// <summary>
+    /// 1.6.35: where the drops lie, for walking to them: the yellow item labels on the ground, grouped in cells, as one weighted
+    /// middle point relative to the character (screen middle, a little below centre). The character's own name plate above its head
+    /// is left out. Returns ok = false when there are too few yellow points to be items.
+    /// </summary>
+    public static async Task<(bool ok, double dx, double dy, double dist, int n, int w)> LootSpotAsync()
+    {
+        var f = await Capture.SnapAsync(C);
+        if (f == null) return (false, 0, 0, 0, 0, 0);
+        int x0 = (int)(f.W * 0.18), x1 = (int)(f.W * 0.82), y0 = (int)(f.H * 0.22), y1 = (int)(f.H * 0.70);
+        double cx = f.W * 0.5, cy = f.H * 0.56;
+        int nx0 = (int)(f.W * 0.42), nx1 = (int)(f.W * 0.58), ny0 = (int)(f.H * 0.28), ny1 = (int)(f.H * 0.50);   // the name plate
+        int cell = Math.Max(12, f.W / 60);
+        var cells = new Dictionary<(int, int), (int n, double sx, double sy)>();
+        for (int y = y0; y < y1; y += 3)
+            for (int x = x0; x < x1; x += 3)
+            {
+                if (x >= nx0 && x < nx1 && y >= ny0 && y < ny1) continue;
+                var (r, g, b) = f.Rgb(x, y);
+                if (!(r >= 175 && g >= 150 && b <= 110 && r - b >= 90 && Math.Abs(r - g) <= 70)) continue;
+                var k = (x / cell, y / cell);
+                cells.TryGetValue(k, out var c);
+                cells[k] = (c.n + 1, c.sx + x, c.sy + y);
+            }
+        // a label is a few cells of solid yellow: single stray points (sparks, the sun on the ground) are left out
+        int n = 0; double sx = 0, sy = 0;
+        foreach (var c in cells.Values) if (c.n >= 3) { n += c.n; sx += c.sx; sy += c.sy; }
+        if (n < 8) return (false, 0, 0, 0, n, f.W);
+        double dx = sx / n - cx, dy = sy / n - cy;
+        return (true, dx, dy, Math.Sqrt(dx * dx + dy * dy), n, f.W);
+    }
+
     /// <summary>Lines of text in a part of the screen given as fractions of its size (the teleport list, buttons ...).</summary>
     public static async Task<List<TextLine>> TextAsync(double fx, double fy, double fw, double fh, int scale = 1)
     {
