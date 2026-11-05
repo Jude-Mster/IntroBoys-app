@@ -664,10 +664,12 @@ static class RunEngine
     internal static async Task WarPopupGuardAsync(TapService svc, CancellationToken ct)
     {
         int presses = 0;
+        Runner.WarPopup = false;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(presses > 0 ? 350 : 800, ct); } catch { return; }
-            if (Runner.OnWarBreak) { presses = 0; continue; }
+            try { await Task.Delay(presses > 0 ? 350 : 800, ct); } catch { Runner.WarPopup = false; return; }
+            if (presses >= 20) { AppLog.Add("war pop-up: still there after 20 presses - attacking on"); Runner.WarPopup = false; presses = 0; continue; }
+            if (Runner.OnWarBreak) { presses = 0; Runner.WarPopup = false; continue; }
             try
             {
                 var (sw, sh) = svc.ScreenSize();
@@ -677,8 +679,12 @@ static class RunEngine
                 if (ask.Text == null || ask.Text.Length == 0)
                 {
                     if (presses > 0) AppLog.Add($"war pop-up: gone ({presses} press{(presses > 1 ? "es" : "")})");
-                    presses = 0; continue;
+                    presses = 0; Runner.WarPopup = false; continue;
                 }
+                // 1.6.38: stop attacking first, and wait for the attack touch that is going on to end, so CANCEL isn't lost under it
+                Runner.WarPopup = true;
+                for (int w = 0; w < 12 && Runner.InPress; w++) await Task.Delay(100, ct);
+                await Task.Delay(120, ct);
                 var cancel = lines.FirstOrDefault(l => { var t = L(l); return t.Length <= 8 && (t.Contains("cancel") || t.Contains("cance") || t.Contains("ancel")); });
                 float x, y;
                 if (cancel.Text != null && cancel.Text.Length > 0) { x = cancel.Cx; y = cancel.Cy; }
@@ -688,6 +694,7 @@ static class RunEngine
             }
             catch { /* the next look */ }
         }
+        Runner.WarPopup = false;
     }
 
     static Place Target(bool den) => den ? Place.Den : Place.Labyrinth;

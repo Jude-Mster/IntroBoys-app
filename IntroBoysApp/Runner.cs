@@ -198,11 +198,17 @@ static class Runner
         for (int i = 0; i < taps; i++)
         {
             ct.ThrowIfCancellationRequested();
+            while (WarPopup) await Task.Delay(100, ct);          // 1.6.38: no loot tap while the war pop-up is being cancelled
             if (await svc.PressAsync(x, y, 120)) ok++;
             await Task.Delay(300, ct);
         }
         return ok;
     }
+
+    /// <summary>1.6.38: the war pop-up is on screen: no attack (or loot) presses until it has been cancelled.</summary>
+    public static volatile bool WarPopup;
+    /// <summary>1.6.38: an attack press is going on right now (the CANCEL tap waits for it to end, or the two touches clash).</summary>
+    public static volatile bool InPress;
 
     public static async Task<string?> PressUntil(TapService svc, BubbleLayout layout, Func<bool> done, CancellationToken ct)
     {
@@ -229,10 +235,20 @@ static class Runner
                     continue;
                 }
 
+                // 1.6.38: the member's rule - war pop-up: stop attacking, cancel it, then attack again
+                if (WarPopup)
+                {
+                    AppLog.Add("war pop-up: attack paused");
+                    while (WarPopup && !ct.IsCancellationRequested) await Task.Delay(100, ct);
+                    AppLog.Add("war pop-up: cancelled - attacking again");
+                    continue;
+                }
                 var b = list[pick];
                 var (w, h) = svc.ScreenSize();
                 var (x, y) = layout.At(b, w, h);
-                bool ok = await svc.PressAsync(x, y, b.Mode == PressMode.Hold ? HoldMs : TapMs);
+                InPress = true;
+                bool ok;
+                try { ok = await svc.PressAsync(x, y, b.Mode == PressMode.Hold ? HoldMs : TapMs); } finally { InPress = false; }
                 ct.ThrowIfCancellationRequested();
                 Pressed?.Invoke(pick);
                 if (b.Mode != PressMode.Hold || Presses == 0) AppLog.Add((b.Mode == PressMode.Hold ? "attack: holding " : "press ") + b.Label + (ok ? "" : " (cancelled)"));
