@@ -158,7 +158,7 @@ static class Runner
             while (!ct.IsCancellationRequested)
             {
                 bool died = false; double seen = 0; DateTime? gone = null;
-                int bare = await Screen.GroundYellowAsync();          // 1.6.34: the ground before this kill (for the loot rule)
+                int bare = await RunEngine.SetLootBaseAsync();        // 1.6.34: the ground before this kill (for the loot rule)
                 using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var watcher = Task.Run(async () =>
                 {
@@ -207,6 +207,7 @@ static class Runner
 
     /// <summary>1.6.38: the war pop-up is on screen: no attack (or loot) presses until it has been cancelled.</summary>
     public static volatile bool WarPopup;
+    public static DateTime WarPopupAt = DateTime.MinValue;
     /// <summary>1.6.38: an attack press is going on right now (the CANCEL tap waits for it to end, or the two touches clash).</summary>
     public static volatile bool InPress;
 

@@ -469,10 +469,10 @@ static class RunEngine
         double buffEvery = buffs.Count == 0 ? double.MaxValue : Math.Max(20, buffs.Min(b => b.Mode == PressMode.Repeat ? b.Every : 120));
         DateTime NextBuff() => buffs.Count == 0 ? DateTime.MaxValue : lastBuff == DateTime.MinValue ? DateTime.UtcNow.AddSeconds(buffEvery) : lastBuff.AddSeconds(buffEvery);
         var nextBuff = NextBuff();
-        lootBase = await Screen.GroundYellowAsync();          // 1.5.1: the ground before anything dropped (see LootAsync)
+        await SetLootBaseAsync();                            // 1.5.1: the ground before anything dropped (see LootAllAsync)
         // 1.3.8: what was seen of the bar is kept for the whole fight (it was forgotten after every check, so on a phone where the red is
         // hard to read the fight stopped every 5 s to look again - and one missed name made the run leave a living boss)
-        double lo = 1, hi = 0;
+        double lo = 1, hi = 0, lastHp = 1;
         int confirmMisses = 0, redReads = 0;
         var lastRed = DateTime.UtcNow;
         var lastLootLook = DateTime.MinValue;
@@ -488,24 +488,32 @@ static class RunEngine
             {
                 while (!watch.IsCancellationRequested)
                 {
+                    // 1.6.40: the war pop-up covers the bar and its gold buttons read as loot: a boss at 78 % was taken for dead
+                    // ("red gone at 8 %, loot on the ground"). Nothing is judged while it is up, and 1.5 s after.
+                    if (Runner.WarPopup || (DateTime.UtcNow - Runner.WarPopupAt).TotalSeconds < 1.5)
+                    {
+                        suspectSince = null; goneSince = null; lastRed = DateTime.UtcNow;
+                        try { await Task.Delay(200, watch.Token); } catch { return; }
+                        continue;
+                    }
                     var (hp, there) = await Screen.BossAsync(layout, hi > 0);
                     if (hp <= 0 && hi <= 0) there = false;            // never saw its red bar: text near the box isn't a boss
                     lastThere = there;
-                    if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; suspectSince = null; }
+                    if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; suspectSince = null; lastHp = hp; }
                     // 1.6.36: the member's rule - when the boss dies, stop attacking and loot. A boss last read at 10 % or less whose red is
                     // gone for 0.6 s is taken as dying: the attack stops at once (no more swings at a corpse, no target press that picks
                     // the respawn) and it is checked without attacking: its drops on the ground, or 2.5 s more with no red, make it dead;
                     // red coming back (it was alive) lets the attack go on at once. A boss that did live is found by the check after the loot.
-                    else if (hi > 0 && lo <= 0.10 && (DateTime.UtcNow - lastRed).TotalSeconds >= 0.6)
+                    else if (hi > 0 && lastHp <= 0.10 && (DateTime.UtcNow - lastRed).TotalSeconds >= 0.6)      // 1.6.40: the last HP read, not the lowest ever (one bad read stuck)
                     {
                         suspectSince ??= DateTime.UtcNow;
                         if (lootBase >= 0 && (DateTime.UtcNow - lastLootLook).TotalSeconds >= 0.5)
                         {
                             lastLootLook = DateTime.UtcNow;
                             int yl = await Screen.GroundYellowAsync();
-                            if (yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: red gone at {lo * 100:0.#} % and its loot is on the ground - dead"); dead = true; return; }
+                            if (yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: red gone at {lastHp * 100:0.#} % and its loot is on the ground - dead"); dead = true; return; }
                         }
-                        if ((DateTime.UtcNow - suspectSince.Value).TotalSeconds >= 2.5) { AppLog.Add($"{name}: no red for 3 s after {lo * 100:0.#} % (not attacking) - dead"); dead = true; return; }
+                        if ((DateTime.UtcNow - suspectSince.Value).TotalSeconds >= 2.5) { AppLog.Add($"{name}: no red for 3 s after {lastHp * 100:0.#} % (not attacking) - dead"); dead = true; return; }
                     }
                     // 1.6.3: the game keeps the dead boss's name in the target box - only the name, no red, kept it "alive": it swung on at a
                     // dead boss and stood there before walking on. On a phone that reads the red well (8+ red readings) a name without red
@@ -519,7 +527,7 @@ static class RunEngine
                         {
                             lastLootLook = DateTime.UtcNow;
                             int yl = await Screen.GroundYellowAsync();
-                            if (lo <= 0.25 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
+                            if (lastHp <= 0.25 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
                         }
                         if (noRedNow >= (lo <= 0.003 ? 4.0 : lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }      // 1.6.27: 4 s when the numbers last read under 0.3 %
                     }
@@ -549,7 +557,7 @@ static class RunEngine
                 if (Suspect())
                 {
                     // dying: no attack while the watcher makes sure (drops seen, or no red for a moment longer); red back = attack on
-                    if (!saidSuspect) { saidSuspect = true; AppLog.Add($"{name}: red gone at {lo * 100:0.#} % - attack stopped, checking it is dead"); }
+                    if (!saidSuspect) { saidSuspect = true; AppLog.Add($"{name}: red gone at {lastHp * 100:0.#} % - attack stopped, checking it is dead"); }
                     var suspectUntil = DateTime.UtcNow.AddSeconds(4);
                     while (!dead && suspectSince != null && DateTime.UtcNow < suspectUntil) await Task.Delay(100, ct);
                     if (dead) break;
@@ -682,7 +690,7 @@ static class RunEngine
                     presses = 0; Runner.WarPopup = false; continue;
                 }
                 // 1.6.38: stop attacking first, and wait for the attack touch that is going on to end, so CANCEL isn't lost under it
-                Runner.WarPopup = true;
+                Runner.WarPopup = true; Runner.WarPopupAt = DateTime.UtcNow;
                 for (int w = 0; w < 12 && Runner.InPress; w++) await Task.Delay(100, ct);
                 await Task.Delay(120, ct);
                 var cancel = lines.FirstOrDefault(l => { var t = L(l); return t.Length <= 8 && (t.Contains("cancel") || t.Contains("cance") || t.Contains("ancel")); });
@@ -764,6 +772,26 @@ static class RunEngine
     /// still seen the character walks toward them (a short push on the stick toward the middle of the yellow labels, up to 8 steps)
     /// and loots again - at most 64 taps then.
     /// </summary>
+    /// <summary>
+    /// 1.6.40: what is yellow before anything dropped: the count (lootBase) and each yellow label there was (a torch, a name, the
+    /// boss's own name plate - they are never loot, and the log showed the same one tapped 30 times at 502 px).
+    /// </summary>
+    static List<(int x, int y, double dist)> baseLabels = new();
+    internal static async Task<int> SetLootBaseAsync()
+    {
+        lootBase = await Screen.GroundYellowAsync();
+        try { baseLabels = await Screen.LootLabelsAsync(); } catch { baseLabels = new(); }
+        return lootBase;
+    }
+
+    /// <summary>
+    /// The loot rule for every kill (1.6.34): straight after the death, before target is pressed again.
+    /// 1.6.40, from the member's log (60 auto-loot taps and 30 hand taps on every kill, ~60 s, on a ground that was already clear):
+    /// - the ground is looked at every round, first: clear twice in a row ends it (a label left on screen no longer keeps it going);
+    /// - auto loot (2 taps) and a tap on an item label take turns; labels that were there before the fight are never tapped, and a
+    ///   label still there after 2 taps is given up;
+    /// - it ends when the ground stops getting clearer for 5 rounds, and after 18 rounds at most (~20 s).
+    /// </summary>
     internal static async Task LootAllAsync(TapService svc, BubbleLayout layout, CancellationToken ct, int bare = int.MinValue, Nav? nav = null)
     {
         if (layout.Find(BubbleKind.AutoLoot) == null) return;
@@ -771,48 +799,49 @@ static class RunEngine
         Runner.SetPhase("looting");
         await Task.Delay(150, ct);
         int thr = 18 + Math.Max(0, lootBase) / 4;
-        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0, picks = 0, steps = 0, rounds = 0;
+        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0, picks = 0, steps = 0, rounds = 0, still = 0, best = int.MaxValue;
         bool canSee = first >= 0 && lootBase >= 0;
-        // 1.6.38: the member's rule - auto loot and picking by hand, taken in turns: 2 auto-loot taps, then a tap right on the nearest
-        // item label on the ground (the game walks there and picks it up), then the ground is looked at again. An item a few steps
-        // away, that auto loot didn't reach, is picked by its label. Until the ground is clear twice; at most 30 rounds (~30 s).
-        while (rounds < 30)
+        var tried = new Dictionary<(int, int), int>();
+        (int, int) Key(int x, int y) => (x / 60, y / 60);
+        bool Known(int x, int y) => baseLabels.Any(b => Math.Abs(b.x - x) < 70 && Math.Abs(b.y - y) < 45);
+        while (rounds < 18)
         {
             rounds++;
+            while (Runner.WarPopup) await Task.Delay(100, ct);
             went += await Runner.LootBurstAsync(svc, layout, ct, 2);
             taps += 2;
             if (!canSee) { if (taps >= 16) break; continue; }
-            var labels = await Screen.LootLabelsAsync();
+            int g = await Screen.GroundYellowAsync();
+            if (g >= 0 && g <= lootBase + thr / 2) { if (rounds >= 2 && ++clear >= 2) break; continue; }
+            clear = 0;
+            if (g >= 0 && g < best - 4) { best = g; still = 0; } else if (++still >= 5) { AppLog.Add("loot: the ground isn't getting any clearer - done"); break; }
+            var labels = (await Screen.LootLabelsAsync()).Where(l => !Known(l.x, l.y) && (!tried.TryGetValue(Key(l.x, l.y), out var n) || n < 2)).ToList();
             if (labels.Count > 0)
             {
-                var (lx, ly, ld) = labels[rounds % 2 == 0 && labels.Count > 1 ? 1 : 0];   // now and then the second nearest, in case one can't be picked
+                var (lx, ly, ld) = labels[0];
+                var k = Key(lx, ly); tried[k] = tried.TryGetValue(k, out var c) ? c + 1 : 1;
                 Runner.SetPhase("picking up the loot");
                 await svc.PressAsync(lx, ly, 60);
                 picks++;
-                if (picks <= 4) AppLog.Add($"loot: tapped an item on the ground ({(int)ld} px away, {labels.Count} seen)");
-                await Task.Delay((int)Math.Clamp(350 + ld * 1.2, 450, 1300), ct);        // time to walk there
+                if (picks <= 4) AppLog.Add($"loot: tapped an item on the ground ({(int)ld} px away, {labels.Count} to pick)");
+                await Task.Delay((int)Math.Clamp(300 + ld * 1.2, 400, 1200), ct);        // time to walk there
                 Runner.SetPhase("looting");
-                clear = 0;
                 continue;
             }
-            int g = await Screen.GroundYellowAsync();
-            if (g >= 0 && g <= lootBase + thr / 2) { if (rounds >= 3 && ++clear >= 2) break; continue; }
-            clear = 0;
-            // yellow is seen but no label can be singled out: a short step toward it (1.6.35)
-            if (nav != null && steps < 6)
+            // yellow is seen but no label can be singled out: a short step toward it
+            if (nav != null && steps < 3)
             {
                 var spot = await Screen.LootSpotAsync();
                 if (spot.ok && spot.dist > spot.w * 0.07)
                 {
-                    double angle = Math.Atan2(-spot.dy, spot.dx) * 180 / Math.PI;
                     steps++;
-                    await nav.StepTowardAsync(angle, (long)Math.Clamp(spot.dist / (spot.w * 0.3) * 700, 250, 900));
+                    await nav.StepTowardAsync(Math.Atan2(-spot.dy, spot.dx) * 180 / Math.PI, (long)Math.Clamp(spot.dist / (spot.w * 0.3) * 700, 250, 900));
                     await Task.Delay(200, ct);
                 }
             }
         }
         int last = canSee ? await Screen.GroundYellowAsync() : -1;
-        AppLog.Add($"loot: {taps} auto-loot taps, {picks} picked by hand{(steps > 0 ? $", {steps} steps" : "")}{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
+        AppLog.Add($"loot: {rounds} rounds, {taps} auto-loot taps, {picks} picked by hand{(steps > 0 ? $", {steps} steps" : "")}{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
             (!canSee ? "the ground can't be read here" : last <= lootBase + thr / 2 ? $"the ground is clear ({first} -> {last}, bare {lootBase})" : $"items still seen ({first} -> {last}, bare {lootBase})"));
     }
 
