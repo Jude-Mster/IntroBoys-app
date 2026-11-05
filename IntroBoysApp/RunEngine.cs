@@ -481,8 +481,8 @@ static class RunEngine
         while (true)
         {
             Runner.ShowPhase("fighting " + name);
-            DateTime? goneSince = null;
-            bool dead = false, lastThere = true;
+            DateTime? goneSince = null, suspectSince = null;
+            bool dead = false, lastThere = true, saidSuspect = false;
             using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var watcher = Task.Run(async () =>
             {
@@ -491,7 +491,22 @@ static class RunEngine
                     var (hp, there) = await Screen.BossAsync(layout, hi > 0);
                     if (hp <= 0 && hi <= 0) there = false;            // never saw its red bar: text near the box isn't a boss
                     lastThere = there;
-                    if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; }
+                    if (hp > 0) { lo = Math.Min(lo, hp); hi = Math.Max(hi, hp); redReads++; lastRed = DateTime.UtcNow; suspectSince = null; }
+                    // 1.6.36: the member's rule - when the boss dies, stop attacking and loot. A boss last read at 10 % or less whose red is
+                    // gone for 0.6 s is taken as dying: the attack stops at once (no more swings at a corpse, no target press that picks
+                    // the respawn) and it is checked without attacking: its drops on the ground, or 2.5 s more with no red, make it dead;
+                    // red coming back (it was alive) lets the attack go on at once. A boss that did live is found by the check after the loot.
+                    else if (hi > 0 && lo <= 0.10 && (DateTime.UtcNow - lastRed).TotalSeconds >= 0.6)
+                    {
+                        suspectSince ??= DateTime.UtcNow;
+                        if (lootBase >= 0 && (DateTime.UtcNow - lastLootLook).TotalSeconds >= 0.5)
+                        {
+                            lastLootLook = DateTime.UtcNow;
+                            int yl = await Screen.GroundYellowAsync();
+                            if (yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: red gone at {lo * 100:0.#} % and its loot is on the ground - dead"); dead = true; return; }
+                        }
+                        if ((DateTime.UtcNow - suspectSince.Value).TotalSeconds >= 2.5) { AppLog.Add($"{name}: no red for 3 s after {lo * 100:0.#} % (not attacking) - dead"); dead = true; return; }
+                    }
                     // 1.6.3: the game keeps the dead boss's name in the target box - only the name, no red, kept it "alive": it swung on at a
                     // dead boss and stood there before walking on. On a phone that reads the red well (8+ red readings) a name without red
                     // counts as gone after 1.2 s when the boss was nearly dead, 6 s otherwise - counted from the last red seen.
@@ -504,7 +519,7 @@ static class RunEngine
                         {
                             lastLootLook = DateTime.UtcNow;
                             int yl = await Screen.GroundYellowAsync();
-                            if (lo <= 0.05 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
+                            if (lo <= 0.25 && yl > lootBase + 18 + lootBase / 4) { AppLog.Add($"{name}: no red and its loot is on the ground - dead"); dead = true; return; }
                         }
                         if (noRedNow >= (lo <= 0.003 ? 4.0 : lo <= LowHp ? 12.0 : 20.0)) { there = false; goneSince ??= lastRed; }      // 1.6.27: 4 s when the numbers last read under 0.3 %
                     }
@@ -524,12 +539,23 @@ static class RunEngine
             bool GoneNow() => goneSince is DateTime gs && (DateTime.UtcNow - gs).TotalSeconds >= 0.5 && hi > 0;
             // 1.6.29: no red bar for 2.5 s while attacking (nothing targeted, or the target lost): the target is pressed again
             // (between two attack presses - a press during the held ATK would cancel it)
-            bool NeedTarget() => (DateTime.UtcNow - lastRed).TotalSeconds >= 2.5 && (DateTime.UtcNow - lastTargetAt).TotalSeconds >= 2.5;
+            bool NeedTarget() => suspectSince == null && (DateTime.UtcNow - lastRed).TotalSeconds >= 2.5 && (DateTime.UtcNow - lastTargetAt).TotalSeconds >= 2.5;
+            bool Suspect() => suspectSince != null;
             string? why = null;
             while (true)
             {
-                why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff || GoneNow() || NeedTarget(), ct);
+                why = await Runner.PressUntil(svc, fightLayout, () => dead || DateTime.UtcNow >= nextBuff || GoneNow() || NeedTarget() || Suspect(), ct);
                 if (why != null || dead || DateTime.UtcNow >= nextBuff) break;
+                if (Suspect())
+                {
+                    // dying: no attack while the watcher makes sure (drops seen, or no red for a moment longer); red back = attack on
+                    if (!saidSuspect) { saidSuspect = true; AppLog.Add($"{name}: red gone at {lo * 100:0.#} % - attack stopped, checking it is dead"); }
+                    var suspectUntil = DateTime.UtcNow.AddSeconds(4);
+                    while (!dead && suspectSince != null && DateTime.UtcNow < suspectUntil) await Task.Delay(100, ct);
+                    if (dead) break;
+                    if (suspectSince == null) { AppLog.Add($"{name}: its red is back - attacking on"); saidSuspect = false; continue; }
+                    break;
+                }
                 if (!GoneNow() && NeedTarget())
                 {
                     lastTargetAt = DateTime.UtcNow;
