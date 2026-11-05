@@ -407,6 +407,55 @@ static class Screen
         return (true, dx, dy, Math.Sqrt(dx * dx + dy * dy), n, f.W);
     }
 
+    /// <summary>
+    /// 1.6.38: each item label lying on the ground, as a point to tap (screen pixels), nearest to the character first. The yellow
+    /// cells are joined into blobs (a label is a short row of letters); tiny blobs (sparks) and the character's own name plate are
+    /// left out. At most 12.
+    /// </summary>
+    public static async Task<List<(int x, int y, double dist)>> LootLabelsAsync()
+    {
+        var res = new List<(int x, int y, double dist)>();
+        var f = await Capture.SnapAsync(C);
+        if (f == null) return res;
+        int x0 = (int)(f.W * 0.18), x1 = (int)(f.W * 0.82), y0 = (int)(f.H * 0.22), y1 = (int)(f.H * 0.70);
+        double cx = f.W * 0.5, cy = f.H * 0.56;
+        int nx0 = (int)(f.W * 0.42), nx1 = (int)(f.W * 0.58), ny0 = (int)(f.H * 0.28), ny1 = (int)(f.H * 0.50);
+        int cell = Math.Max(10, f.W / 80);
+        int cw = (x1 - x0) / cell + 1, ch = (y1 - y0) / cell + 1;
+        var n = new int[cw, ch]; var sx = new double[cw, ch]; var sy = new double[cw, ch];
+        for (int y = y0; y < y1; y += 2)
+            for (int x = x0; x < x1; x += 2)
+            {
+                if (x >= nx0 && x < nx1 && y >= ny0 && y < ny1) continue;
+                var (r, g, b) = f.Rgb(x, y);
+                if (!(r >= 175 && g >= 150 && b <= 110 && r - b >= 90 && Math.Abs(r - g) <= 70)) continue;
+                int i = (x - x0) / cell, j = (y - y0) / cell; n[i, j]++; sx[i, j] += x; sy[i, j] += y;
+            }
+        var seen = new bool[cw, ch];
+        for (int i = 0; i < cw; i++)
+            for (int j = 0; j < ch; j++)
+            {
+                if (seen[i, j] || n[i, j] < 3) continue;
+                // join neighbouring cells (a label runs sideways: up to 2 empty cells between letters are bridged)
+                int tot = 0; double bx = 0, by = 0; var st = new Stack<(int, int)>(); st.Push((i, j)); seen[i, j] = true;
+                while (st.Count > 0)
+                {
+                    var (a1, b1) = st.Pop(); tot += n[a1, b1]; bx += sx[a1, b1]; by += sy[a1, b1];
+                    for (int da = -3; da <= 3; da++)
+                        for (int db = -1; db <= 1; db++)
+                        {
+                            int a2 = a1 + da, b2 = b1 + db;
+                            if (a2 < 0 || b2 < 0 || a2 >= cw || b2 >= ch || seen[a2, b2] || n[a2, b2] < 2) continue;
+                            seen[a2, b2] = true; st.Push((a2, b2));
+                        }
+                }
+                if (tot < 12) continue;
+                int px = (int)(bx / tot), py = (int)(by / tot);
+                res.Add((px, py, Math.Sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy))));
+            }
+        return res.OrderBy(q => q.dist).Take(12).ToList();
+    }
+
     /// <summary>Lines of text in a part of the screen given as fractions of its size (the teleport list, buttons ...).</summary>
     public static async Task<List<TextLine>> TextAsync(double fx, double fy, double fw, double fh, int scale = 1)
     {

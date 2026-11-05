@@ -764,36 +764,48 @@ static class RunEngine
         Runner.SetPhase("looting");
         await Task.Delay(150, ct);
         int thr = 18 + Math.Max(0, lootBase) / 4;
-        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0, steps = 0;
+        int first = await Screen.GroundYellowAsync(), taps = 0, went = 0, clear = 0, picks = 0, steps = 0, rounds = 0;
         bool canSee = first >= 0 && lootBase >= 0;
-        while (taps < (steps > 0 ? 64 : 40))
+        // 1.6.38: the member's rule - auto loot and picking by hand, taken in turns: 2 auto-loot taps, then a tap right on the nearest
+        // item label on the ground (the game walks there and picks it up), then the ground is looked at again. An item a few steps
+        // away, that auto loot didn't reach, is picked by its label. Until the ground is clear twice; at most 30 rounds (~30 s).
+        while (rounds < 30)
         {
-            went += await Runner.LootBurstAsync(svc, layout, ct, 4);
-            taps += 4;
+            rounds++;
+            went += await Runner.LootBurstAsync(svc, layout, ct, 2);
+            taps += 2;
             if (!canSee) { if (taps >= 16) break; continue; }
-            if (taps < 8) continue;
+            var labels = await Screen.LootLabelsAsync();
+            if (labels.Count > 0)
+            {
+                var (lx, ly, ld) = labels[rounds % 2 == 0 && labels.Count > 1 ? 1 : 0];   // now and then the second nearest, in case one can't be picked
+                Runner.SetPhase("picking up the loot");
+                await svc.PressAsync(lx, ly, 60);
+                picks++;
+                if (picks <= 4) AppLog.Add($"loot: tapped an item on the ground ({(int)ld} px away, {labels.Count} seen)");
+                await Task.Delay((int)Math.Clamp(350 + ld * 1.2, 450, 1300), ct);        // time to walk there
+                Runner.SetPhase("looting");
+                clear = 0;
+                continue;
+            }
             int g = await Screen.GroundYellowAsync();
-            if (g >= 0 && g <= lootBase + thr / 2) { if (++clear >= 2) break; continue; }
+            if (g >= 0 && g <= lootBase + thr / 2) { if (rounds >= 3 && ++clear >= 2) break; continue; }
             clear = 0;
-            // items are still lying there: walk up to them when they are not right at the character's feet
-            if (nav != null && steps < 8)
+            // yellow is seen but no label can be singled out: a short step toward it (1.6.35)
+            if (nav != null && steps < 6)
             {
                 var spot = await Screen.LootSpotAsync();
                 if (spot.ok && spot.dist > spot.w * 0.07)
                 {
                     double angle = Math.Atan2(-spot.dy, spot.dx) * 180 / Math.PI;
-                    long ms = (long)Math.Clamp(spot.dist / (spot.w * 0.3) * 700, 250, 900);
                     steps++;
-                    Runner.SetPhase("walking to the loot");
-                    if (steps <= 3) AppLog.Add($"loot: items {(int)spot.dist} px away (angle {angle:0}) - walking closer ({ms} ms)");
-                    await nav.StepTowardAsync(angle, ms);
+                    await nav.StepTowardAsync(angle, (long)Math.Clamp(spot.dist / (spot.w * 0.3) * 700, 250, 900));
                     await Task.Delay(200, ct);
-                    Runner.SetPhase("looting");
                 }
             }
         }
         int last = canSee ? await Screen.GroundYellowAsync() : -1;
-        AppLog.Add($"loot: {taps} taps{(steps > 0 ? $", {steps} steps toward the items" : "")}{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
+        AppLog.Add($"loot: {taps} auto-loot taps, {picks} picked by hand{(steps > 0 ? $", {steps} steps" : "")}{(went < taps ? $" ({taps - went} cancelled by Android)" : "")} - " +
             (!canSee ? "the ground can't be read here" : last <= lootBase + thr / 2 ? $"the ground is clear ({first} -> {last}, bare {lootBase})" : $"items still seen ({first} -> {last}, bare {lootBase})"));
     }
 
