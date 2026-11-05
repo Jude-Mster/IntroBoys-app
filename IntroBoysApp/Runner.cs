@@ -100,6 +100,7 @@ static class Runner
         if (m == RunMode.Attack)
         {
             _ = Task.Run(() => Loop(svc, layout, ct));
+            _ = Task.Run(() => RunEngine.WarPopupGuardAsync(svc, ct));     // 1.6.37: the war pop-up stops auto attack too
             AppLog.Add("start: auto attack (" + layout.Bubbles.Count(b => b.Mode != PressMode.Off && !b.IsArea) + " bubbles)");
         }
         else

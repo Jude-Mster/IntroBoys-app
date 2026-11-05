@@ -655,23 +655,36 @@ static class RunEngine
 
     /// <summary>
     /// 1.6.11: the "WAR - [Bohai Outpost (Adept)] Confirm to move?" pop-up stopped the run on the phone (the PC presses CANCEL on it).
-    /// Looked for every 3 s while a run goes on; CANCEL is pressed - never OK - except on the war break (the war is joined then).
+    /// CANCEL is pressed - never OK - except on the war break (the war is joined then).
+    /// 1.6.37: it took a long time to go: one look every 3 s over a big part of the screen, and a CANCEL that the text reader missed
+    /// waited for the next look. Now a quick look every 0.8 s at the box's middle only; the button is found by its word (any reading
+    /// of "cancel"), or else where it always sits (left of the box's middle, under the question); after the press it looks again at
+    /// once and presses again while the box is still there. Also guards auto attack, not only the runs.
     /// </summary>
-    static async Task WarPopupGuardAsync(TapService svc, CancellationToken ct)
+    internal static async Task WarPopupGuardAsync(TapService svc, CancellationToken ct)
     {
+        int presses = 0;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(3000, ct); } catch { return; }
-            if (Runner.OnWarBreak) continue;
+            try { await Task.Delay(presses > 0 ? 350 : 800, ct); } catch { return; }
+            if (Runner.OnWarBreak) { presses = 0; continue; }
             try
             {
-                var lines = await Screen.TextAsync(0.25, 0.30, 0.50, 0.40, Math.Min(svc.ScreenSize().w, svc.ScreenSize().h) < 1000 ? 2 : 1);
+                var (sw, sh) = svc.ScreenSize();
+                var lines = await Screen.TextAsync(0.30, 0.40, 0.40, 0.26, Math.Min(sw, sh) < 1000 ? 2 : 1);
                 string L(TextLine l) => new string(l.Text.Where(char.IsLetter).ToArray()).ToLowerInvariant();
-                if (!lines.Any(l => L(l).Contains("confirmtomove") || L(l).Contains("tomove"))) continue;
-                var cancel = lines.FirstOrDefault(l => L(l) == "cancel");
-                if (cancel.Text == null || cancel.Text.Length == 0) { AppLog.Add("war pop-up: on screen, but its CANCEL button wasn't found"); continue; }
-                await svc.PressAsync(cancel.Cx, cancel.Y + cancel.H / 2, 80);
-                AppLog.Add("war pop-up: pressed CANCEL");
+                var ask = lines.FirstOrDefault(l => L(l).Contains("tomove") || L(l).Contains("confirmto") || L(l).Contains("outpost"));
+                if (ask.Text == null || ask.Text.Length == 0)
+                {
+                    if (presses > 0) AppLog.Add($"war pop-up: gone ({presses} press{(presses > 1 ? "es" : "")})");
+                    presses = 0; continue;
+                }
+                var cancel = lines.FirstOrDefault(l => { var t = L(l); return t.Length <= 8 && (t.Contains("cancel") || t.Contains("cance") || t.Contains("ancel")); });
+                float x, y;
+                if (cancel.Text != null && cancel.Text.Length > 0) { x = cancel.Cx; y = cancel.Cy; }
+                else { x = ask.Cx - sw * 0.055f; y = ask.Cy + sh * 0.058f; }      // where CANCEL sits under the question
+                await svc.PressAsync(x, y, 80);
+                if (++presses <= 3) AppLog.Add("war pop-up: pressed CANCEL" + (cancel.Text == null || cancel.Text.Length == 0 ? " (by its place)" : ""));
             }
             catch { /* the next look */ }
         }
