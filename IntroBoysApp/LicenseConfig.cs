@@ -19,7 +19,10 @@ static class LicenseConfig
     public const string PublicKeyB64 = "__LICENSE_PUBLIC_KEY__";
 
     /// <summary>Keep in step with ApplicationDisplayVersion in IntroBoysApp.csproj.</summary>
-    public const string AppVersion = "1.6.40";
+    public const string AppVersion = "1.6.40 (no sign-in)";
+
+    /// <summary>The no-sign-in build (branch nologin): no guild sign-in, no license check, no Assistant days, no updates from the site.</summary>
+    public const bool NoLogin = true;
 
     /// <summary>Tells the site this sign-in is a phone (the Guild Leader switches the phone Assistant on per member).</summary>
     public const string Platform = "android";

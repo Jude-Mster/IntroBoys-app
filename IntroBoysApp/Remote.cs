@@ -32,7 +32,7 @@ static class Remote
             int wait = 8000;
             try
             {
-                if (License.State != LicenseState.SignedOut)
+                if (!LicenseConfig.NoLogin && License.State != LicenseState.SignedOut)
                 {
                     var body = new Dictionary<string, object?> { ["state"] = State(), ["log"] = AppLog.Last(20) };
                     List<Dictionary<string, object?>> done;

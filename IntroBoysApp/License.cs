@@ -122,6 +122,7 @@ public static class License
     /// <summary>Starts watching the license: loads the saved sign-in, asks the site, and keeps asking.</summary>
     public static void Begin()
     {
+        if (LicenseConfig.NoLogin) { Set(LicenseState.Licensed, "No sign-in needed", "No sign-in build", 0); return; }
         lock (gate)
         {
             if (loop != null) return;
@@ -386,6 +387,7 @@ public static class License
     /// <summary>null when everything is in order, otherwise why the program may not act.</summary>
     static string? Problem()
     {
+        if (LicenseConfig.NoLogin) return null;
         string? payload, sig; long recv, iat, ttl, exp, verified;
         lock (gate) { payload = ticketPayload; sig = ticketSig; recv = ticketRecv; iat = ticketIat; ttl = ticketTtl; exp = ticketExp; verified = lastVerify; }
         if (payload == null || sig == null) return "No active license (sign in, and buy Assistant days on the guild site).";
@@ -431,6 +433,7 @@ public static class License
     /// <summary>"29d 23h 41m 12s" - the time left as shown in the window.</summary>
     public static string TimeLeftText()
     {
+        if (LicenseConfig.NoLogin) return "no limit";
         double s = SecondsLeft;
         if (s < 0) return "-";
         var t = TimeSpan.FromSeconds(Math.Floor(s));

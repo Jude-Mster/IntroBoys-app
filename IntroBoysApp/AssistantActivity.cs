@@ -212,14 +212,14 @@ public class AssistantActivity : Activity
         bool signedIn = License.State is not (LicenseState.SignedOut or LicenseState.NotMember);
         who.Text = License.UserName.Length > 0 ? License.UserName : signedIn ? "Signed in" : "Not signed in";
         bool ok = License.State == LicenseState.Licensed;
-        days!.Visibility = ok ? ViewStates.Visible : ViewStates.Gone;
+        days!.Visibility = ok && !LicenseConfig.NoLogin ? ViewStates.Visible : ViewStates.Gone;
         days.Text = License.DaysLeft == 1 ? "1 DAY" : License.DaysLeft + " DAYS";
-        licMsg!.Text = ok ? "License active · " + License.TimeLeftText() + " left" : License.Message;
+        licMsg!.Text = LicenseConfig.NoLogin ? "No sign-in needed · ready to use" : ok ? "License active · " + License.TimeLeftText() + " left" : License.Message;
         licMsg.SetTextColor(ok ? Ui.Green : License.State is LicenseState.Checking ? Ui.Soft : Ui.Gold);
         bool waiting = signing != null;
-        signIn!.Visibility = !signedIn && !waiting ? ViewStates.Visible : ViewStates.Gone;
-        recheck!.Visibility = signedIn ? ViewStates.Visible : ViewStates.Gone;
-        signOut!.Visibility = signedIn ? ViewStates.Visible : ViewStates.Gone;
+        signIn!.Visibility = !signedIn && !waiting && !LicenseConfig.NoLogin ? ViewStates.Visible : ViewStates.Gone;
+        recheck!.Visibility = signedIn && !LicenseConfig.NoLogin ? ViewStates.Visible : ViewStates.Gone;
+        signOut!.Visibility = signedIn && !LicenseConfig.NoLogin ? ViewStates.Visible : ViewStates.Gone;
         codeBox!.Visibility = waiting && codeText!.Text!.Length > 0 ? ViewStates.Visible : ViewStates.Gone;
 
         bool tapsOn = TapService.Instance != null;

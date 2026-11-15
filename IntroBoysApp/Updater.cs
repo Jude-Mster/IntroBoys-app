@@ -39,6 +39,7 @@ static class Updater
     /// </summary>
     public static async Task<Release?> CheckAsync(Context c)
     {
+        if (LicenseConfig.NoLogin) return null;      // the site's update has the sign-in again: never offered to this build
         var a = await FromLinkAsync();
         var b = await FromManifestAsync();
         var best = a == null ? b : b == null ? a : (a.Code >= b.Code ? a : b);
