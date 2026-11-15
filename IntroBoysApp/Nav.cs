@@ -814,7 +814,7 @@ sealed class Nav
                 // correct the stick direction from how the character really moved (the camera may have turned)
                 double moved = np.Dist(prev.X, prev.Y);
                 // 1.5.3: on a slow phone only a longer stretch teaches the direction (short ones are mostly reading lag)
-                if (moved > (Sluggish ? 120 : 60) && !double.IsNaN(prevStick) && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(prevStick - s)) < 12)
+                if (moved > (Sluggish ? 120 : 40) && !double.IsNaN(prevStick)      /* 1.6.41: 40 (was 60) - narrow corridors */ && DateTime.UtcNow >= detourUntil && Math.Abs(Norm(prevStick - s)) < 12)
                 {
                     double seen = MapAngle(np.X - prev.X, np.Y - prev.Y);
                     // turned well away from "up" and the character went the mirrored way: the stick turns the other way round

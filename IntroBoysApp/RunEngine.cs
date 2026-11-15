@@ -246,7 +246,11 @@ static class RunEngine
         {
             // 1.6.30: the Den: face the boss's way (the turn remembered from last time, no test step) and walk the PC's way straight to
             // the boss - no gate push of its own (it stopped and started there), no measuring steps
-            await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct, place: "_den", verify: false);
+            // 1.6.41: with a test step again. The member's log (game Ver 1.0.0): the remembered turn now left the view ~65° off, and every
+            // entry walked into the wall at 1243 , 1600 (the corridor is narrow there, the walk had no room to correct itself). The test
+            // step measures where the camera really looks, turns onto the boss's way when it is more than 10° off, and the new turn is
+            // remembered for the next entry.
+            await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct, place: "_den", verify: true);
             return;
         }
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
@@ -683,7 +687,10 @@ static class RunEngine
                 var (sw, sh) = svc.ScreenSize();
                 var lines = await Screen.TextAsync(0.30, 0.40, 0.40, 0.26, Math.Min(sw, sh) < 1000 ? 2 : 1);
                 string L(TextLine l) => new string(l.Text.Where(char.IsLetter).ToArray()).ToLowerInvariant();
-                var ask = lines.FirstOrDefault(l => L(l).Contains("tomove") || L(l).Contains("confirmto") || L(l).Contains("outpost"));
+                // 1.6.41: only the war's "Confirm to MOVE?" - "confirm to" alone also matched the return scroll's "Confirm to use [Return Scroll]?",
+                // and CANCEL was pressed on it every time (the run then stopped: "the return scroll didn't take the character to town")
+                if (lines.Any(l => { var t = L(l); return t.Contains("touse") || t.Contains("returnscroll") || t.Contains("scroll"); })) { if (presses > 0) presses = 0; Runner.WarPopup = false; continue; }
+                var ask = lines.FirstOrDefault(l => L(l).Contains("tomove") || L(l).Contains("outpost"));
                 if (ask.Text == null || ask.Text.Length == 0)
                 {
                     if (presses > 0) AppLog.Add($"war pop-up: gone ({presses} press{(presses > 1 ? "es" : "")})");
