@@ -283,6 +283,17 @@ sealed class Nav
     /// </summary>
     public void Forget() { known = false; goodAt = default; }
 
+    /// <summary>
+    /// 1.6.42: the camera is left exactly as the game sets it and taken to look toward <paramref name="toward"/> (the stick pushed up goes
+    /// that way). The walk still corrects the direction from how the character really moves.
+    /// </summary>
+    public void AssumeFacing(double toward)
+    {
+        hand = Prefs.GetInt("nav_hand", 1); if (hand == 0) hand = 1;
+        off = Norm(toward - hand * 90);
+        known = true;
+    }
+
     static double Norm(double a) { a %= 360; if (a > 180) a -= 360; if (a < -180) a += 360; return a; }
     static double MapAngle(int dx, int dy) => Math.Atan2(dy, dx) * 180 / Math.PI;
 

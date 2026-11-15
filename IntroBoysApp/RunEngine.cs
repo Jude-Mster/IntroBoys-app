@@ -250,7 +250,10 @@ static class RunEngine
             // entry walked into the wall at 1243 , 1600 (the corridor is narrow there, the walk had no room to correct itself). The test
             // step measures where the camera really looks, turns onto the boss's way when it is more than 10° off, and the new turn is
             // remembered for the next entry.
-            await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct, place: "_den", verify: true);
+            // 1.6.42: no camera turn at all in the Den, as on the PC since 4.12.1: after the teleport the game already looks up the
+            // corridor at the boss, and every turn (remembered or measured) over-turned it into the wall. Stick up = toward the boss.
+            nav.AssumeFacing(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI);
+            AppLog.Add("camera: left as the game sets it after the teleport (looking up the corridor) - no turn");
             return;
         }
         await nav.AlignAsync(Math.Atan2(ty - p.Y, tx - p.X) * 180 / Math.PI, ct);
