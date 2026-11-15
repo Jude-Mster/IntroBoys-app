@@ -1,0 +1,8 @@
+{
+  "versionCode": 97,
+  "versionName": "1.6.42",
+  "url": "https://blacklistintroboys.com/app/introboys.apk",
+  "sha256": "db04e5d6261e3418c83cdf549a02032f1afecdb841bf33f15fee068c959fca79",
+  "size": 46559806,
+  "notes": "Move pad held and dragged without lifting. Loot only after a kill (every 400 ms). Auto hunt bubble. No HP presses. No camera test after the teleport. Better HP bar reading."
+}
