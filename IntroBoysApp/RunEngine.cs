@@ -790,6 +790,9 @@ static class RunEngine
     internal static async Task<int> SetLootBaseAsync()
     {
         lootBase = await Screen.GroundYellowAsync();
+        // 1.6.43: the member's log had "bare 3056" and "bare 15492" (something big and yellow on screen when the fight began): the ground then
+        // always looked clear and looting stopped after 3 rounds. A bare ground far above normal is not believed.
+        if (lootBase > 300) { AppLog.Add($"loot: the ground before the fight read {lootBase} (something on screen) - using 60"); lootBase = 60; }
         try { baseLabels = await Screen.LootLabelsAsync(); } catch { baseLabels = new(); }
         return lootBase;
     }

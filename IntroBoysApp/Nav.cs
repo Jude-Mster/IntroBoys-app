@@ -524,6 +524,9 @@ sealed class Nav
             await Task.Delay(250, ct);
             if (!await CalibrateAsync(ct)) return;             // and where it really is (a step and back)
             double got = Norm(Forward - before);
+            // 1.6.43: a turn near 180° reads either way round (the member's log: asked 171°, read -164° = really 196°, so the drag size
+            // was learned backwards and the next turns went the wrong way: 3 turns, 32 s at the gate). Taken as the reading nearest the ask.
+            got = ask + Norm(got - ask);
             if (Math.Abs(got - ask) <= 40) continue;           // close to what was asked: the drag size is right
             careful = true;
             double was = perPx;
