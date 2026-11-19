@@ -119,7 +119,7 @@ static class Screen
             if (++posMisses >= 3 && System.Environment.TickCount64 - lastWide > 4000)
             {
                 lastWide = System.Environment.TickCount64;
-                int wx = f.W / 2, ww = f.W - wx, wh = (int)(f.H * 0.32);
+                int wx = (int)(f.W * 0.58), ww = f.W - wx, wh = (int)(f.H * 0.28);      // 1.6.44: the top right only (was the whole right half)
                 var wide = await Ocr.ReadAsync(f, wx, 0, ww, wh, 2);
                 var (p2, m2) = ReadPos(wide, true);
                 if (p2.Ok)
@@ -152,11 +152,19 @@ static class Screen
         if (parts.Length == 4 && parts.All(q => int.TryParse(q, out _)))
         {
             int[] v = parts.Select(int.Parse).ToArray();
-            if (v[2] > 20 && v[3] > 10 && v[0] + v[2] <= f.W && v[1] + v[3] <= f.H) return (v[0], v[1], v[2], v[3]);
+            if (v[2] > 20 && v[3] > 10 && v[0] + v[2] <= f.W && v[1] + v[3] <= f.H && InCorner(f, v[0], v[1], v[2], v[3])) return (v[0], v[1], v[2], v[3]);
+            if (v[2] > 20) Prefs.Edit()!.Remove(key)!.Apply();       // 1.6.44: a box learned in the wrong place (see InCorner) is forgotten
         }
         int w = Math.Min(f.W / 2, Math.Max((int)(f.W * 0.20), (int)(f.H * 0.46)));
         return (f.W - w, (int)(f.H * 0.035), w, (int)(f.H * 0.10));
     }
+
+    /// <summary>
+    /// 1.6.44: the mini-map (title and numbers) is always in the top right corner. A member's log (crowded town, Android 9) learned the box at
+    /// 926,169 and 698,100 - player name plates like "[81]" and "1,507" read as the map and the position (146 , 856): every teleport then
+    /// "didn't arrive" and every walk "couldn't measure the stick". Only a box in the top right is learned or used.
+    /// </summary>
+    static bool InCorner(Frame f, int x, int y, int w, int h) => x + w / 2 >= f.W * 0.62 && y + h <= f.H * 0.30 && w <= f.W * 0.40;
 
     /// <summary>The numbers (and title) were found in the wide search: remember that place, with room around it.</summary>
     static void Learn(Frame f, List<TextLine> lines)
@@ -169,6 +177,7 @@ static class Screen
         float padX = Math.Max(f.H * 0.08f, (x1 - x0) * 0.5f), padY = Math.Max(f.H * 0.02f, (y1 - y0) * 0.6f);
         int bx = (int)Math.Max(0, x0 - padX), by = (int)Math.Max(0, y0 - padY);
         int bw = (int)Math.Min(f.W - bx, x1 - x0 + 2 * padX), bh = (int)Math.Min(f.H - by, y1 - y0 + 2 * padY);
+        if (!InCorner(f, bx, by, bw, bh)) { AppLog.Add($"screen: numbers seen at {bx},{by} - not the mini-map corner, ignored"); return; }
         Prefs.Edit()!.PutString($"pos_box_{f.W}x{f.H}", $"{bx},{by},{bw},{bh}")!.Apply();
         AppLog.Add($"screen: found the mini-map numbers at {bx},{by} ({bw} x {bh}) on this {f.W} x {f.H} screen - remembered");
         posMisses = 0;
